@@ -260,6 +260,33 @@ async def import_mcp_from_smithery(
             '   `import_mcp_server(server_id="github", config={"smithery_api_key": "your-key"})`'
         )
 
+    # Write key back to discover_resources / import_mcp_server AgentTool configs
+    # so it shows up in the Config dialog
+    try:
+        async with async_session() as db:
+            for tool_name in ("discover_resources", "import_mcp_server"):
+                r = await db.execute(select(Tool).where(Tool.name == tool_name))
+                tool = r.scalar_one_or_none()
+                if not tool:
+                    continue
+                at_r = await db.execute(
+                    select(AgentTool).where(
+                        AgentTool.agent_id == agent_id,
+                        AgentTool.tool_id == tool.id,
+                    )
+                )
+                at = at_r.scalar_one_or_none()
+                if at:
+                    at.config = {**(at.config or {}), "smithery_api_key": api_key}
+                else:
+                    db.add(AgentTool(
+                        agent_id=agent_id, tool_id=tool.id, enabled=True,
+                        source="system", config={"smithery_api_key": api_key},
+                    ))
+            await db.commit()
+    except Exception:
+        pass  # non-critical — key is still usable from MCP tool configs
+
     # Step 1: Search for server by ID
     headers = {"Accept": "application/json"}
 
