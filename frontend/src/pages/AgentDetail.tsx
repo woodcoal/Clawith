@@ -1619,10 +1619,15 @@ function AgentDetailInner() {
                         if (match) {
                             if (currentItem) focusItems.push(currentItem);
                             const marker = match[1];
+                            const fullText = match[2].trim();
+                            // Split on first colon: "identifier: description"
+                            const colonIdx = fullText.indexOf(':');
+                            const itemName = colonIdx > 0 ? fullText.substring(0, colonIdx).trim() : fullText;
+                            const itemDesc = colonIdx > 0 ? fullText.substring(colonIdx + 1).trim() : '';
                             currentItem = {
-                                id: match[2].trim(),
-                                name: match[2].trim(),
-                                description: '',
+                                id: itemName,
+                                name: itemName,
+                                description: itemDesc,
                                 done: marker.toLowerCase() === 'x',
                                 inProgress: marker === '/',
                             };
