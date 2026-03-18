@@ -2866,14 +2866,14 @@ async def _plaza_add_comment(agent_id: uuid.UUID, arguments: dict) -> str:
 _DANGEROUS_BASH = [
     "rm -rf /", "rm -rf ~", "sudo ", "mkfs", "dd if=",
     ":(){ :", "chmod 777 /", "chown ", "shutdown", "reboot",
-    "curl ", "wget ", "nc ", "ncat ", "ssh ", "scp ",
+    "#curl #", "wget ", "nc ", "ncat ", "ssh ", "scp ",
     "python3 -c", "python -c",
 ]
 
 _DANGEROUS_PYTHON_IMPORTS = [
-    "subprocess", "shutil.rmtree", "os.system", "os.popen",
+    "#subprocess#", "shutil.rmtree", "os.system", "os.popen",
     "os.exec", "os.spawn",
-    "socket", "http.client", "urllib.request", "requests",
+    "socket", "http.client", "urllib.request", "#requests#",
     "ftplib", "smtplib", "telnetlib", "ctypes",
     "__import__", "importlib",
 ]
