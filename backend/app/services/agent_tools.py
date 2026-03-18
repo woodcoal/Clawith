@@ -818,6 +818,44 @@ AGENT_TOOLS = [
             },
         },
     },
+    # ─── Browser Automation Tools ───────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "agent_browser",
+            "description": "Headless browser automation CLI for AI agents. Navigate pages, interact with elements using accessibility tree refs, take snapshots, and automate multi-step web workflows. Use 'agent-browser open' to navigate, 'agent-browser snapshot -i --json' to get interactive elements, then use refs like '@e1' to click/fill elements. Install: npm install -g agent-browser && agent-browser install",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["open", "snapshot", "click", "fill", "type", "hover", "check", "uncheck", "select", "press", "scroll", "drag", "get", "is", "wait", "screenshot", "pdf", "back", "forward", "reload", "close", "tab", "frame"],
+                        "description": "Browser action to perform: open (navigate), snapshot (get element tree), click/fill/type (interact), get (read values), is (check state), wait (pause), screenshot/pdf (capture), back/forward/reload (navigate), close (end session), tab (manage tabs), frame (switch iframe)"
+                    },
+                    "url": {"type": "string", "description": "URL to open (for 'open' action)"},
+                    "element_ref": {"type": "string", "description": "Element reference like @e1 or @e2 (get from snapshot output)"},
+                    "text": {"type": "string", "description": "Text to fill or type into input fields"},
+                    "value": {"type": "string", "description": "Value for select dropdown or attribute name"},
+                    "key": {"type": "string", "description": "Attribute name (for 'get attr') or key name (for storage) or keyboard key (for 'press')"},
+                    "selector": {"type": "string", "description": "CSS selector for scoped snapshot or count"},
+                    "property": {"type": "string", "enum": ["text", "html", "value", "attr", "title", "url", "count"], "description": "Property to get: text (element text), html (element HTML), value (input value), attr (attribute), title (page title), url (current URL), count (element count)"},
+                    "state": {"type": "string", "enum": ["visible", "enabled", "checked"], "description": "Element state to check: visible, enabled, or checked"},
+                    "wait_for": {"type": "string", "description": "Text or selector to wait for"},
+                    "direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"},
+                    "pixels": {"type": "integer", "description": "Pixels to scroll (default 300)"},
+                    "target_ref": {"type": "string", "description": "Target element ref for drag operation"},
+                    "tab_index": {"type": "integer", "description": "Tab index (0-based) to switch to"},
+                    "file_path": {"type": "string", "description": "File path for screenshot or PDF output"},
+                    "full_page": {"type": "boolean", "description": "Capture full page for screenshot"},
+                    "network": {"type": "string", "description": "Network idle mode: 'load', 'domcontentloaded', 'networkidle'"},
+                    "compact": {"type": "boolean", "description": "Use compact output format for snapshot"},
+                    "depth": {"type": "integer", "description": "Max snapshot depth"},
+                    "session": {"type": "string", "description": "Browser session name for isolation (allows multiple concurrent sessions)"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
 ]
 
 
@@ -1196,6 +1234,9 @@ async def execute_tool(
         # ── Email Tools ──
         elif tool_name in ("send_email", "read_emails", "reply_email"):
             result = await _handle_email_tool(tool_name, agent_id, ws, arguments)
+        # ── Browser Automation Tools ──
+        elif tool_name == "agent_browser":
+            result = await _agent_browser(agent_id, ws, arguments)
         else:
             # Try MCP tool execution
             result = await _execute_mcp_tool(tool_name, arguments, agent_id=agent_id)
@@ -4693,3 +4734,243 @@ async def _handle_email_tool(tool_name: str, agent_id: uuid.UUID, ws: Path, argu
             return f"❌ Unknown email tool: {tool_name}"
     except Exception as e:
         return f"❌ Email tool error: {str(e)[:200]}"
+
+
+# ─── Browser Automation Tool ─────────────────────────────────
+
+async def _agent_browser(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
+    """Execute agent-browser CLI commands for headless browser automation.
+    
+    agent-browser is a headless browser automation CLI that provides:
+    - Navigation (open, back, forward, reload, close)
+    - Element snapshots with accessibility tree refs
+    - Interactions (click, fill, hover, check, select, press, scroll, drag)
+    - Information retrieval (get text, html, value, attr, title, url, count)
+    - State checks (is visible, enabled, checked)
+    - Wait conditions (element, text, URL, network)
+    - Screenshots and PDFs
+    - Session management and state persistence
+    - Network control (route, abort, mock)
+    
+    Install: npm install -g agent-browser && agent-browser install
+    """
+    import subprocess
+    import json as json_mod
+    
+    action = arguments.get("action", "")
+    if not action:
+        return "❌ Please specify an action (open, snapshot, click, fill, etc.)"
+    
+    # Build the agent-browser command
+    cmd = ["agent-browser"]
+    
+    # Session isolation: each agent gets its own browser session
+    session = arguments.get("session") or f"agent_{str(agent_id)[:8]}"
+    cmd.extend(["--session", session])
+    
+    # Handle headed mode (for debugging)
+    config = {}
+    try:
+        from app.models.tool import Tool
+        async with async_session() as db:
+            r = await db.execute(select(Tool).where(Tool.name == "agent_browser"))
+            tool = r.scalar_one_or_none()
+            if tool and tool.config:
+                config = tool.config
+    except Exception:
+        pass
+    if config.get("headed"):
+        cmd.append("--headed")
+    
+    # Build action-specific arguments
+    if action == "open":
+        url = arguments.get("url", "")
+        if not url:
+            return "❌ URL is required for 'open' action"
+        cmd.extend(["open", url])
+    elif action == "snapshot":
+        cmd.append("snapshot")
+        if arguments.get("interactive", True):
+            cmd.append("-i")
+        if arguments.get("compact"):
+            cmd.append("-c")
+        depth = arguments.get("depth")
+        if depth:
+            cmd.extend(["-d", str(depth)])
+        selector = arguments.get("selector")
+        if selector:
+            cmd.extend(["-s", selector])
+        if arguments.get("json_output", True):
+            cmd.append("--json")
+    elif action == "click":
+        ref = arguments.get("element_ref", "")
+        if not ref:
+            return "❌ element_ref (e.g., @e1) is required for 'click' action"
+        cmd.extend(["click", ref])
+    elif action == "fill":
+        ref = arguments.get("element_ref", "")
+        text = arguments.get("text", "")
+        if not ref:
+            return "❌ element_ref is required for 'fill' action"
+        cmd.extend(["fill", ref, text])
+    elif action == "type":
+        ref = arguments.get("element_ref", "")
+        text = arguments.get("text", "")
+        if not ref:
+            return "❌ element_ref is required for 'type' action"
+        cmd.extend(["type", ref, text])
+    elif action == "hover":
+        ref = arguments.get("element_ref", "")
+        if not ref:
+            return "❌ element_ref is required for 'hover' action"
+        cmd.extend(["hover", ref])
+    elif action in ("check", "uncheck"):
+        ref = arguments.get("element_ref", "")
+        if not ref:
+            return "❌ element_ref is required"
+        cmd.extend([action, ref])
+    elif action == "select":
+        ref = arguments.get("element_ref", "")
+        value = arguments.get("value", "")
+        if not ref or not value:
+            return "❌ element_ref and value are required for 'select' action"
+        cmd.extend(["select", ref, value])
+    elif action == "press":
+        key = arguments.get("key", "")
+        if not key:
+            return "❌ key is required for 'press' action"
+        cmd.extend(["press", key])
+    elif action == "scroll":
+        direction = arguments.get("direction", "down")
+        pixels = arguments.get("pixels", 300)
+        cmd.extend(["scroll", direction, str(pixels)])
+    elif action == "drag":
+        source_ref = arguments.get("element_ref", "")
+        target_ref = arguments.get("target_ref", "")
+        if not source_ref or not target_ref:
+            return "❌ element_ref and target_ref are required for 'drag' action"
+        cmd.extend(["drag", source_ref, target_ref])
+    elif action == "get":
+        ref = arguments.get("element_ref", "")
+        property_type = arguments.get("property", "")
+        if not property_type:
+            return "❌ property is required for 'get' action (text, html, value, attr, title, url, count)"
+        if property_type == "count":
+            selector = arguments.get("selector", "")
+            cmd.extend(["get", "count", selector, "--json"])
+        elif property_type == "attr":
+            attr_name = arguments.get("key", "")
+            if not ref or not attr_name:
+                return "❌ element_ref and key (attribute name) are required for 'get attr'"
+            cmd.extend(["get", "attr", ref, attr_name, "--json"])
+        elif property_type == "title":
+            cmd.extend(["get", "title", "--json"])
+        elif property_type == "url":
+            cmd.extend(["get", "url", "--json"])
+        else:
+            if not ref:
+                return "❌ element_ref is required for 'get text/html/value'"
+            cmd.extend(["get", property_type, ref, "--json"])
+    elif action == "is":
+        ref = arguments.get("element_ref", "")
+        state = arguments.get("state", "")
+        if not ref or not state:
+            return "❌ element_ref and state are required for 'is' action (visible, enabled, checked)"
+        cmd.extend(["is", state, ref, "--json"])
+    elif action == "wait":
+        wait_for = arguments.get("wait_for", "")
+        network = arguments.get("network", "")
+        key = arguments.get("key", "")
+        if wait_for:
+            cmd.extend(["wait", "--text", wait_for])
+        elif network:
+            cmd.extend(["wait", "--load", network])
+        elif key:
+            cmd.extend(["wait", "--fn", key])
+        else:
+            ref = arguments.get("element_ref", "")
+            if ref:
+                cmd.extend(["wait", ref])
+            else:
+                ms = arguments.get("milliseconds", 1000)
+                cmd.extend(["wait", str(ms)])
+    elif action == "screenshot":
+        file_path = arguments.get("file_path", "screenshot.png")
+        cmd.extend(["screenshot"])
+        if arguments.get("full_page"):
+            cmd.append("--full")
+        cmd.append(file_path)
+    elif action == "pdf":
+        file_path = arguments.get("file_path", "page.pdf")
+        cmd.extend(["pdf", file_path])
+    elif action == "back":
+        cmd.append("back")
+    elif action == "forward":
+        cmd.append("forward")
+    elif action == "reload":
+        cmd.append("reload")
+    elif action == "close":
+        cmd.append("close")
+    elif action == "tab":
+        tab_index = arguments.get("tab_index")
+        url = arguments.get("url", "")
+        if tab_index is not None:
+            cmd.extend(["tab", str(tab_index)])
+        elif url:
+            cmd.extend(["tab", "new", url])
+        else:
+            return "❌ tab_index or url is required for 'tab' action"
+    elif action == "frame":
+        ref = arguments.get("element_ref", "")
+        if ref:
+            cmd.extend(["frame", ref])
+        else:
+            cmd.extend(["frame", "main"])
+    else:
+        return f"❌ Unknown action: {action}. Supported: open, snapshot, click, fill, type, hover, check, uncheck, select, press, scroll, drag, get, is, wait, screenshot, pdf, back, forward, reload, close, tab, frame"
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            if "not found" in stderr.lower() or "command not found" in stderr.lower():
+                return (
+                    "❌ agent-browser is not installed.\n\n"
+                    "Please install it first:\n"
+                    "```bash\nnpm install -g agent-browser\nagent-browser install\n```\n"
+                    "Then restart the agent."
+                )
+            return f"❌ agent-browser error: {stderr[:500]}"
+        
+        output = result.stdout.strip()
+        
+        # Try to parse JSON output for structured responses
+        if arguments.get("json_output", False) or action in ("snapshot", "get", "is", "wait"):
+            try:
+                data = json_mod.loads(output)
+                if isinstance(data, dict):
+                    if not data.get("success", True):
+                        return f"❌ {data.get('error', 'Unknown error')}"
+                    return json_mod.dumps(data.get("data", data), indent=2, ensure_ascii=False)
+                return json_mod.dumps(data, indent=2, ensure_ascii=False)
+            except json_mod.JSONDecodeError:
+                pass
+        
+        return output if output else "✅ Action completed successfully"
+        
+    except subprocess.TimeoutExpired:
+        return "❌ agent-browser command timed out (60s limit)"
+    except FileNotFoundError:
+        return (
+            "❌ agent-browser not found.\n\n"
+            "Install it with:\n"
+            "```bash\nnpm install -g agent-browser\nagent-browser install\n```"
+        )
+    except Exception as e:
+        return f"❌ agent-browser error: {str(e)[:200]}"

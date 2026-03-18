@@ -832,6 +832,62 @@ BUILTIN_TOOLS = [
         "config": {},
         "config_schema": {},
     },
+    # --- Browser Automation Tools ---
+    {
+        "name": "agent_browser",
+        "display_name": "Agent Browser",
+        "description": "Headless browser automation CLI for AI agents. Navigate pages, interact with elements using accessibility tree refs, take snapshots, and automate multi-step web workflows. Use 'agent-browser open' to navigate, 'agent-browser snapshot -i --json' to get interactive elements, then use refs like '@e1' to click/fill elements.",
+        "category": "browser",
+        "icon": "🌐",
+        "is_default": False,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["open", "snapshot", "click", "fill", "type", "hover", "check", "uncheck", "select", "press", "scroll", "drag", "get", "is", "wait", "screenshot", "pdf", "back", "forward", "reload", "close", "tab", "frame"],
+                    "description": "Browser action to perform"
+                },
+                "url": {"type": "string", "description": "URL to open (for 'open' action)"},
+                "element_ref": {"type": "string", "description": "Element reference like @e1 (for click, fill, hover, etc.)"},
+                "text": {"type": "string", "description": "Text to fill or type"},
+                "value": {"type": "string", "description": "Value for select or attribute"},
+                "key": {"type": "string", "description": "Attribute name (for get attr) or key name (for storage)"},
+                "selector": {"type": "string", "description": "CSS selector (for scoped snapshot)"},
+                "property": {"type": "string", "enum": ["text", "html", "value", "attr", "title", "url", "count"], "description": "Property to get"},
+                "state": {"type": "string", "enum": ["visible", "enabled", "checked"], "description": "Element state to check"},
+                "wait_for": {"type": "string", "description": "Text, URL pattern, or selector to wait for"},
+                "direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"},
+                "pixels": {"type": "integer", "description": "Pixels to scroll (default 300)"},
+                "target_ref": {"type": "string", "description": "Target element for drag operation"},
+                "tab_index": {"type": "integer", "description": "Tab index for tab action"},
+                "file_path": {"type": "string", "description": "File path for screenshot or PDF"},
+                "full_page": {"type": "boolean", "description": "Capture full page (for screenshot)"},
+                "network": {"type": "string", "description": "Network idle mode: 'load', 'domcontentloaded', 'networkidle'"},
+                "compact": {"type": "boolean", "description": "Use compact output format"},
+                "depth": {"type": "integer", "description": "Max snapshot depth"},
+                "interactive": {"type": "boolean", "description": "Only show interactive elements", "default": True},
+                "json_output": {"type": "boolean", "description": "Output as JSON", "default": True},
+                "session": {"type": "string", "description": "Browser session name for isolation"},
+            },
+            "required": ["action"],
+        },
+        "config": {},
+        "config_schema": {
+            "fields": [
+                {
+                    "key": "headed",
+                    "label": "Show Browser Window",
+                    "type": "select",
+                    "options": [
+                        {"value": "false", "label": "Headless (faster, no window)"},
+                        {"value": "true", "label": "Headed (see browser for debugging)"},
+                    ],
+                    "default": "false",
+                },
+            ]
+        },
+    },
 ]
 
 
