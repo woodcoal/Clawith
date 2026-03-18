@@ -28,7 +28,7 @@ export default defineConfig({
     }
   },
   server: {
-    allowHosts: true,
+    allowedHosts: true,
     port: 3008,
     host: '0.0.0.0',
     proxy: {
