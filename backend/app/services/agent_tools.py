@@ -4745,18 +4745,8 @@ async def _handle_email_tool(tool_name: str, agent_id: uuid.UUID, ws: Path, argu
 async def _agent_browser(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
     """Execute agent-browser CLI commands for headless browser automation.
     
-    agent-browser is a headless browser automation CLI that provides:
-    - Navigation (open, back, forward, reload, close)
-    - Element snapshots with accessibility tree refs
-    - Interactions (click, fill, hover, check, select, press, scroll, drag)
-    - Information retrieval (get text, html, value, attr, title, url, count)
-    - State checks (is visible, enabled, checked)
-    - Wait conditions (element, text, URL, network)
-    - Screenshots and PDFs
-    - Session management and state persistence
-    - Network control (route, abort, mock)
-    
-    Install: npm install -g agent-browser && agent-browser install
+    agent-browser is a headless browser automation CLI that provides browser automation
+    for AI agents.
     """
     import subprocess
     import json as json_mod
@@ -4786,6 +4776,8 @@ async def _agent_browser(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
     if config.get("headed"):
         cmd.append("--headed")
     
+    action_result_hint = ""
+
     # Build action-specific arguments
     if action == "open":
         url = arguments.get("url", "")
@@ -4899,36 +4891,31 @@ async def _agent_browser(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
                 ms = arguments.get("milliseconds", 1000)
                 cmd.extend(["wait", str(ms)])
     elif action == "screenshot":
-        filename = arguments.get("file_path", f"screenshot_{datetime.now().strftime('%H%M%S')}.png")
-        # Ensure structured storage: workspace/uploads/browser/{date}/{filename}
+        input_filename = arguments.get("file_path", f"screenshot_{datetime.now().strftime('%H%M%S')}.png")
+        filename = Path(input_filename).name
         today = datetime.now().strftime("%Y-%m-%d")
         rel_dir = Path("workspace") / "uploads" / "browser" / today
         uploads_dir = ws / rel_dir
         uploads_dir.mkdir(parents=True, exist_ok=True)
-        
         file_path = (uploads_dir / filename).resolve()
         
         cmd.extend(["screenshot"])
         if arguments.get("full_page"):
             cmd.append("--full")
         cmd.append(str(file_path))
-        
-        # We will append the relative path to the result later
         action_result_hint = f"\n✅ Screenshot saved to: {rel_dir / filename}"
 
     elif action == "pdf":
-        filename = arguments.get("file_path", f"page_{datetime.now().strftime('%H%M%S')}.pdf")
-        # Ensure structured storage: workspace/uploads/browser/{date}/{filename}
+        input_filename = arguments.get("file_path", f"page_{datetime.now().strftime('%H%M%S')}.pdf")
+        filename = Path(input_filename).name
         today = datetime.now().strftime("%Y-%m-%d")
         rel_dir = Path("workspace") / "uploads" / "browser" / today
         uploads_dir = ws / rel_dir
         uploads_dir.mkdir(parents=True, exist_ok=True)
-        
         file_path = (uploads_dir / filename).resolve()
         
         cmd.extend(["pdf", str(file_path)])
-        
-        # We will append the relative path to the result later
+        action_result_hint = f"\n✅ PDF saved to: {rel_dir / filename}"
         action_result_hint = f"\n✅ PDF saved to: {rel_dir / filename}"
     elif action == "back":
         cmd.append("back")
@@ -4956,33 +4943,22 @@ async def _agent_browser(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
     else:
         return f"❌ Unknown action: {action}. Supported: open, snapshot, click, fill, type, hover, check, uncheck, select, press, scroll, drag, get, is, wait, screenshot, pdf, back, forward, reload, close, tab, frame"
     
-    # Determine working directory (must be absolute)
-    work_dir = ws.resolve()
-    work_dir.mkdir(parents=True, exist_ok=True)
-
     try:
         import asyncio
-        # Inherit parent environment but override HOME to agent root
-        safe_env = dict(os.environ)
-        safe_env["HOME"] = str(work_dir)
+        # 使用 asyncio.to_thread 运行同步的 subprocess.run，避免阻塞事件循环
+        # 移除强制的 cwd 和 env 设置，使其与控制台手动运行环境完全一致
+        def _sync_run():
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            
+        result = await asyncio.to_thread(_sync_run)
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            cwd=str(work_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=safe_env,
-        )
-
-        try:
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.communicate()
-            return "❌ agent-browser command timed out (60s limit)"
-
-        if proc.returncode != 0:
-            stderr_text = stderr.decode("utf-8", errors="replace").strip()
+        if result.returncode != 0:
+            stderr_text = result.stderr.strip()
             if "not found" in stderr_text.lower() or "command not found" in stderr_text.lower():
                 return (
                     "❌ agent-browser is not installed.\n\n"
@@ -4992,7 +4968,7 @@ async def _agent_browser(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
                 )
             return f"❌ agent-browser error: {stderr_text[:500]}"
 
-        output = stdout.decode("utf-8", errors="replace").strip()
+        output = result.stdout.strip()
 
         # Try to parse JSON output for structured responses
         if arguments.get("json_output", False) or action in ("snapshot", "get", "is", "wait"):
@@ -5007,11 +4983,13 @@ async def _agent_browser(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
                 pass
 
         final_output = output if output else "✅ Action completed successfully"
-        if action in ("screenshot", "pdf") and "action_result_hint" in locals():
+        if action_result_hint:
             final_output += action_result_hint
             
         return final_output
 
+    except subprocess.TimeoutExpired:
+        return "❌ agent-browser command timed out (60s limit)"
     except FileNotFoundError:
         return (
             "❌ agent-browser not found.\n\n"
