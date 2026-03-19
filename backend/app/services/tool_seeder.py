@@ -861,7 +861,7 @@ BUILTIN_TOOLS = [
                 "pixels": {"type": "integer", "description": "Pixels to scroll (default 300)"},
                 "target_ref": {"type": "string", "description": "Target element for drag operation"},
                 "tab_index": {"type": "integer", "description": "Tab index for tab action"},
-                "file_path": {"type": "string", "description": "File path for screenshot or PDF"},
+                "file_path": {"type": "string", "description": "文件名（例如 'screenshot.png'）。文件将按规律自动保存到：workspace/uploads/browser/{date}/{filename}"},
                 "full_page": {"type": "boolean", "description": "Capture full page (for screenshot)"},
                 "network": {"type": "string", "description": "Network idle mode: 'load', 'domcontentloaded', 'networkidle'"},
                 "compact": {"type": "boolean", "description": "Use compact output format"},

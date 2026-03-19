@@ -364,7 +364,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "execute_code",
-            "description": "Execute code (Python, Bash, or Node.js) in a sandboxed environment within the agent's workspace directory. Useful for data processing, calculations, file transformations, and automation scripts. Code runs with the workspace as the working directory. Security restrictions apply: no network access commands, no system-level operations, 30-second timeout.",
+            "description": "Execute code (Python, Bash, or Node.js) in a sandboxed environment. Useful for data processing, calculations, file transformations, and automation scripts. Code runs with the agent root as the working directory (containing workspace/ and skills/). Security restrictions apply: no network access commands, no system-level operations, 30-second timeout.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -375,7 +375,7 @@ AGENT_TOOLS = [
                     },
                     "code": {
                         "type": "string",
-                        "description": "Code to execute. For Python, you can import standard libraries (json, csv, math, re, collections, etc.). Working directory is your workspace/.",
+                        "description": "Code to execute. For Python, you can import standard libraries. Working directory is your agent root (contains workspace/, skills/, etc.).",
                     },
                     "timeout": {
                         "type": "integer",
@@ -845,7 +845,7 @@ AGENT_TOOLS = [
                     "pixels": {"type": "integer", "description": "Pixels to scroll (default 300)"},
                     "target_ref": {"type": "string", "description": "Target element ref for drag operation"},
                     "tab_index": {"type": "integer", "description": "Tab index (0-based) to switch to"},
-                    "file_path": {"type": "string", "description": "File path for screenshot or PDF output"},
+                    "file_path": {"type": "string", "description": "文件名（例如 'screenshot.png'）。文件将按规律自动保存到：workspace/uploads/browser/{date}/{filename}"},
                     "full_page": {"type": "boolean", "description": "Capture full page for screenshot"},
                     "network": {"type": "string", "description": "Network idle mode: 'load', 'domcontentloaded', 'networkidle'"},
                     "compact": {"type": "boolean", "description": "Use compact output format for snapshot"},
@@ -1082,7 +1082,7 @@ async def _execute_tool_direct(
                 return "Missing path"
             return _write_file(ws, path, content)
         elif tool_name == "execute_code":
-            return await _execute_code(agent_id, ws, arguments)
+            return await _execute_code(ws, arguments)
         elif tool_name == "web_search":
             return await _web_search(arguments)
         elif tool_name == "jina_search":
@@ -2966,8 +2966,8 @@ async def _execute_code(ws: Path, arguments: dict) -> str:
     if safety_error:
         return safety_error
 
-    # Working directory is the agent's workspace/ subdirectory (must be absolute)
-    work_dir = (ws / "workspace").resolve()
+    # Working directory is the agent's root directory (contains workspace/ and skills/)
+    work_dir = ws.resolve()
     work_dir.mkdir(parents=True, exist_ok=True)
 
     # Determine command and file extension
@@ -2983,15 +2983,19 @@ async def _execute_code(ws: Path, arguments: dict) -> str:
     else:
         return f"❌ Unsupported language: {language}"
 
-    # Write code to a temp file inside workspace
-    script_path = work_dir / f"_exec_tmp{ext}"
+    # Write code to a temp file inside workspace/ for organization
+    temp_dir = (ws / "workspace").resolve()
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    script_path = temp_dir / f"_exec_tmp{ext}"
     try:
         script_path.write_text(code, encoding="utf-8")
 
-        # Inherit parent environment but override HOME to workspace
+        # Inherit parent environment but override HOME to agent root
         safe_env = dict(os.environ)
         safe_env["HOME"] = str(work_dir)
         safe_env["PYTHONDONTWRITEBYTECODE"] = "1"
+        # Add root to PYTHONPATH so imports from workspace/ or skills/ work
+        safe_env["PYTHONPATH"] = str(work_dir)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd_prefix, str(script_path),
@@ -4895,14 +4899,37 @@ async def _agent_browser(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
                 ms = arguments.get("milliseconds", 1000)
                 cmd.extend(["wait", str(ms)])
     elif action == "screenshot":
-        file_path = arguments.get("file_path", "screenshot.png")
+        filename = arguments.get("file_path", f"screenshot_{datetime.now().strftime('%H%M%S')}.png")
+        # Ensure structured storage: workspace/uploads/browser/{date}/{filename}
+        today = datetime.now().strftime("%Y-%m-%d")
+        rel_dir = Path("workspace") / "uploads" / "browser" / today
+        uploads_dir = ws / rel_dir
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        
+        file_path = (uploads_dir / filename).resolve()
+        
         cmd.extend(["screenshot"])
         if arguments.get("full_page"):
             cmd.append("--full")
-        cmd.append(file_path)
+        cmd.append(str(file_path))
+        
+        # We will append the relative path to the result later
+        action_result_hint = f"\n✅ Screenshot saved to: {rel_dir / filename}"
+
     elif action == "pdf":
-        file_path = arguments.get("file_path", "page.pdf")
-        cmd.extend(["pdf", file_path])
+        filename = arguments.get("file_path", f"page_{datetime.now().strftime('%H%M%S')}.pdf")
+        # Ensure structured storage: workspace/uploads/browser/{date}/{filename}
+        today = datetime.now().strftime("%Y-%m-%d")
+        rel_dir = Path("workspace") / "uploads" / "browser" / today
+        uploads_dir = ws / rel_dir
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        
+        file_path = (uploads_dir / filename).resolve()
+        
+        cmd.extend(["pdf", str(file_path)])
+        
+        # We will append the relative path to the result later
+        action_result_hint = f"\n✅ PDF saved to: {rel_dir / filename}"
     elif action == "back":
         cmd.append("back")
     elif action == "forward":
@@ -4929,27 +4956,44 @@ async def _agent_browser(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
     else:
         return f"❌ Unknown action: {action}. Supported: open, snapshot, click, fill, type, hover, check, uncheck, select, press, scroll, drag, get, is, wait, screenshot, pdf, back, forward, reload, close, tab, frame"
     
+    # Determine working directory (must be absolute)
+    work_dir = ws.resolve()
+    work_dir.mkdir(parents=True, exist_ok=True)
+
     try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=60,
+        import asyncio
+        # Inherit parent environment but override HOME to agent root
+        safe_env = dict(os.environ)
+        safe_env["HOME"] = str(work_dir)
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=str(work_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=safe_env,
         )
-        
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            if "not found" in stderr.lower() or "command not found" in stderr.lower():
+
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.communicate()
+            return "❌ agent-browser command timed out (60s limit)"
+
+        if proc.returncode != 0:
+            stderr_text = stderr.decode("utf-8", errors="replace").strip()
+            if "not found" in stderr_text.lower() or "command not found" in stderr_text.lower():
                 return (
                     "❌ agent-browser is not installed.\n\n"
                     "Please install it first:\n"
                     "```bash\nnpm install -g agent-browser\nagent-browser install\n```\n"
                     "Then restart the agent."
                 )
-            return f"❌ agent-browser error: {stderr[:500]}"
-        
-        output = result.stdout.strip()
-        
+            return f"❌ agent-browser error: {stderr_text[:500]}"
+
+        output = stdout.decode("utf-8", errors="replace").strip()
+
         # Try to parse JSON output for structured responses
         if arguments.get("json_output", False) or action in ("snapshot", "get", "is", "wait"):
             try:
@@ -4961,11 +5005,13 @@ async def _agent_browser(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
                 return json_mod.dumps(data, indent=2, ensure_ascii=False)
             except json_mod.JSONDecodeError:
                 pass
-        
-        return output if output else "✅ Action completed successfully"
-        
-    except subprocess.TimeoutExpired:
-        return "❌ agent-browser command timed out (60s limit)"
+
+        final_output = output if output else "✅ Action completed successfully"
+        if action in ("screenshot", "pdf") and "action_result_hint" in locals():
+            final_output += action_result_hint
+            
+        return final_output
+
     except FileNotFoundError:
         return (
             "❌ agent-browser not found.\n\n"
