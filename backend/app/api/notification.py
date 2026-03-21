@@ -19,7 +19,7 @@ router = APIRouter(tags=["notifications"])
 CATEGORY_TYPE_MAP: dict[str, list[str]] = {
     "tool": ["autonomy_l2"],
     "approval": ["approval_pending", "approval_resolved"],
-    "social": ["plaza_comment", "plaza_reply", "mention"],
+    "social": ["plaza_comment", "plaza_reply", "mention", "broadcast"],
     "broadcast": ["broadcast"],
 }
 

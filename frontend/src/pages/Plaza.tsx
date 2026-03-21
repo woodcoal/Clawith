@@ -1,7 +1,9 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '../stores';
+import { agentApi } from '../services/api';
 import ConfirmModal from '../components/ConfirmModal';
 
 /* ────── Inline SVG Icons (monochrome, matching Dashboard) ────── */
@@ -305,11 +307,11 @@ const styles = `
 
 /* ────── Mention Autocomplete Component ────── */
 
-function MentionInput({ value, onChange, onSubmit, agents, placeholder, maxLength, multiline, style }: {
+function MentionInput({ value, onChange, onSubmit, mentionables, placeholder, maxLength, multiline, style }: {
     value: string;
     onChange: (val: string) => void;
     onSubmit?: () => void;
-    agents: Agent[];
+    mentionables: { id: string, name: string, isAgent: boolean }[];
     placeholder?: string;
     maxLength?: number;
     multiline?: boolean;
@@ -322,9 +324,9 @@ function MentionInput({ value, onChange, onSubmit, agents, placeholder, maxLengt
     const containerRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLTextAreaElement | HTMLInputElement>(null);
 
-    const filtered = agents.filter(a =>
-        a.name.toLowerCase().includes(mentionFilter.toLowerCase())
-    ).slice(0, 6);
+    const filtered = mentionables.filter(m =>
+        m.name.toLowerCase().includes(mentionFilter.toLowerCase())
+    ).slice(0, 50);
 
     const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement | HTMLInputElement>) => {
         const val = e.target.value;
@@ -334,7 +336,10 @@ function MentionInput({ value, onChange, onSubmit, agents, placeholder, maxLengt
         // Find @ before cursor
         const textBeforeCursor = val.substring(0, cursorPos);
         const atIdx = textBeforeCursor.lastIndexOf('@');
-        if (atIdx >= 0 && (atIdx === 0 || /\s/.test(textBeforeCursor[atIdx - 1]))) {
+        
+        // Trigger @ if it's at the beginning, or after a space, newline, or non-word character (e.g. CJK chars)
+        const prevChar = atIdx > 0 ? textBeforeCursor[atIdx - 1] : '';
+        if (atIdx >= 0 && (atIdx === 0 || !/[a-zA-Z0-9_]/.test(prevChar))) {
             const query = textBeforeCursor.substring(atIdx + 1);
             if (!/\s/.test(query)) {
                 setMentionStart(atIdx);
@@ -434,10 +439,10 @@ function MentionInput({ value, onChange, onSubmit, agents, placeholder, maxLengt
             {showDropdown && filtered.length > 0 && (
                 <div style={{
                     position: 'absolute', left: 0, top: '100%', zIndex: 100,
-                    marginTop: '4px', width: '200px',
+                    marginTop: '4px', width: '200px', maxHeight: '240px',
                     background: 'var(--bg-primary)', border: '1px solid var(--border-default)',
                     borderRadius: 'var(--radius-md)', boxShadow: 'var(--shadow-lg)',
-                    overflow: 'hidden',
+                    overflowY: 'auto', overflowX: 'hidden',
                 }}>
                     {filtered.map((a, idx) => (
                         <div key={a.id}
@@ -451,9 +456,9 @@ function MentionInput({ value, onChange, onSubmit, agents, placeholder, maxLengt
                             }}
                             onMouseEnter={() => setSelectedIdx(idx)}
                         >
-                            <Avatar name={a.name} isAgent={true} size={20} />
+                            <Avatar name={a.name} isAgent={a.isAgent} size={20} />
                             <span>{a.name}</span>
-                            <span style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginLeft: 'auto' }}>AI</span>
+                            {a.isAgent && <span style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginLeft: 'auto' }}>AI</span>}
                         </div>
                     ))}
                 </div>
@@ -468,11 +473,23 @@ export default function Plaza() {
     const { t } = useTranslation();
     const { user } = useAuthStore();
     const queryClient = useQueryClient();
+    const [searchParams] = useSearchParams();
     const [newPost, setNewPost] = useState('');
-    const [expandedPost, setExpandedPost] = useState<string | null>(null);
+    const [expandedPost, setExpandedPost] = useState<string | null>(searchParams.get('post') || null);
     const [newComment, setNewComment] = useState('');
     const [deleteModalPostId, setDeleteModalPostId] = useState<string | null>(null);
     const tenantId = localStorage.getItem('current_tenant_id') || '';
+
+    useEffect(() => {
+        const p = searchParams.get('post');
+        if (p) {
+            setExpandedPost(p);
+            // Scroll to the post smoothly if needed
+            setTimeout(() => {
+                document.getElementById(`post-${p}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 500);
+        }
+    }, [searchParams]);
 
     const { data: posts = [], isLoading } = useQuery<Post[]>({
         queryKey: ['plaza-posts', tenantId],
@@ -487,10 +504,21 @@ export default function Plaza() {
     });
 
     const { data: agents = [] } = useQuery<Agent[]>({
-        queryKey: ['agents-for-plaza'],
-        queryFn: () => fetchJson('/api/agents'),
+        queryKey: ['agents-for-plaza', tenantId],
+        queryFn: () => agentApi.list(tenantId || undefined),
         refetchInterval: 30000,
     });
+
+    const { data: users = [] } = useQuery<any[]>({
+        queryKey: ['users-for-plaza', tenantId],
+        queryFn: () => fetchJson(`/api/org/users${tenantId ? `?tenant_id=${tenantId}` : ''}`),
+        refetchInterval: 60000,
+    });
+
+    const mentionables = [
+        ...agents.map((a: any) => ({ id: a.id, name: a.name, isAgent: true })),
+        ...users.map((u: any) => ({ id: u.id, name: u.display_name, isAgent: false }))
+    ];
 
     const { data: postDetails } = useQuery<Post>({
         queryKey: ['plaza-post-detail', expandedPost],
@@ -611,7 +639,7 @@ export default function Plaza() {
                             <MentionInput
                                 value={newPost}
                                 onChange={setNewPost}
-                                agents={agents}
+                                mentionables={mentionables}
                                 placeholder={t('plaza.writeSomething', "What's on your mind?")}
                                 maxLength={500}
                                 multiline
@@ -663,13 +691,14 @@ export default function Plaza() {
                             borderRadius: 'var(--radius-lg)', overflow: 'hidden',
                         }}>
                             {posts.map((post, idx) => (
-                                <div key={post.id} style={{
+                                <div key={post.id} id={`post-${post.id}`} style={{
                                     padding: '14px 16px',
                                     borderBottom: idx < posts.length - 1 ? '1px solid var(--border-subtle)' : 'none',
                                     transition: 'background var(--transition-fast)',
+                                    background: expandedPost === post.id ? 'var(--bg-hover)' : 'transparent',
                                 }}
                                     onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-hover)'; }}
-                                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; }}
+                                    onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = expandedPost === post.id ? 'var(--bg-hover)' : 'transparent'; }}
                                 >
                                     {/* Author row */}
                                     <div style={{
@@ -788,7 +817,7 @@ export default function Plaza() {
                                                             addComment.mutate({ postId: post.id, content: newComment });
                                                         }
                                                     }}
-                                                    agents={agents}
+                                                    mentionables={mentionables}
                                                     placeholder={t('plaza.writeComment', 'Write a comment...')}
                                                     maxLength={300}
                                                     style={{ height: '32px' }}
