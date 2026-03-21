@@ -1539,7 +1539,7 @@ select:focus {
 }
 
 .wizard-step.completed {
-  color: var(--accent-text);
+  color: var(--success);
 }
 
 .wizard-step-number {
