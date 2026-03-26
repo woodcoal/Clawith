@@ -8,6 +8,56 @@ import ChannelConfig from '../components/ChannelConfig';
 const STEPS = ['basicInfo', 'personality', 'skills', 'permissions', 'channel'] as const;
 const OPENCLAW_STEPS = ['basicInfo', 'permissions'] as const;
 
+/**
+ * Generic parser for soul_template markdown format.
+ * Extracts content from sections by header names (## Header Name).
+ * 
+ * @param soulTemplate - The markdown template string
+ * @param sectionNames - Array of section names to extract (e.g., ['Personality', 'Boundaries'])
+ * @returns Object with extracted section contents (lowercase keys)
+ * 
+ * @example
+ * const sections = parseSoulTemplate(markdown, ['Personality', 'Boundaries', 'Identity']);
+ * // Returns: { personality: '...', boundaries: '...', identity: '...' }
+ */
+function parseSoulTemplate(soulTemplate: string, sectionNames: string[] = []): Record<string, string> {
+    if (!soulTemplate) {
+        const empty: Record<string, string> = {};
+        sectionNames.forEach(name => {
+            empty[name.toLowerCase()] = '';
+        });
+        return empty;
+    }
+
+    const result: Record<string, string> = {};
+    
+    // Initialize all requested sections as empty
+    sectionNames.forEach(name => {
+        result[name.toLowerCase()] = '';
+    });
+
+    // Split by markdown ## headers
+    const sections = soulTemplate.split(/^##\s+/m);
+
+    for (let i = 0; i < sections.length; i++) {
+        const section = sections[i].trim();
+        const firstLineEnd = section.indexOf('\n');
+        const headerName = firstLineEnd > 0 ? section.slice(0, firstLineEnd).trim() : section.trim();
+        const content = firstLineEnd > 0 ? section.slice(firstLineEnd + 1).trim() : '';
+
+        // If this header matches one of our requested sections
+        const matchedSection = sectionNames.find(name => 
+            name.toLowerCase() === headerName.toLowerCase()
+        );
+        
+        if (matchedSection) {
+            result[matchedSection.toLowerCase()] = content;
+        }
+    }
+
+    return result;
+}
+
 export default function AgentCreate() {
     const { t } = useTranslation();
     const navigate = useNavigate();
@@ -513,7 +563,17 @@ For humans, the message is delivered via their available channel (e.g. Feishu).`
                                     {templates.map((tmpl: any) => (
                                         <div
                                             key={tmpl.id}
-                                            onClick={() => setForm({ ...form, template_id: tmpl.id, role_description: tmpl.description })}
+                                            onClick={() => {
+                                                // Parse soul_template to extract personality and boundaries
+                                                const sections = parseSoulTemplate(tmpl.soul_template, ['Personality', 'Boundaries']);
+                                                setForm({
+                                                    ...form,
+                                                    template_id: tmpl.id,
+                                                    role_description: tmpl.description,
+                                                    personality: sections.personality || '',
+                                                    boundaries: sections.boundaries || '',
+                                                });
+                                            }}
                                             style={{
                                                 padding: '12px', borderRadius: '8px', cursor: 'pointer', textAlign: 'center',
                                                 border: `1px solid ${form.template_id === tmpl.id ? 'var(--accent-primary)' : 'var(--border-default)'}`,

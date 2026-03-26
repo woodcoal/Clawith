@@ -64,6 +64,7 @@ const getAgentBadgeStatus = (agent: any): string | null => {
 function AccountSettingsModal({ user, onClose, isChinese }: { user: any; onClose: () => void; isChinese: boolean }) {
     const { setUser } = useAuthStore();
     const [username, setUsername] = useState(user?.username || '');
+    const [email, setEmail] = useState(user?.email || '');
     const [displayName, setDisplayName] = useState(user?.display_name || '');
     const [oldPassword, setOldPassword] = useState('');
     const [newPassword, setNewPassword] = useState('');
@@ -82,6 +83,7 @@ function AccountSettingsModal({ user, onClose, isChinese }: { user: any; onClose
             const token = localStorage.getItem('token');
             const body: any = {};
             if (username !== user?.username) body.username = username;
+            if (email !== user?.email) body.email = email;
             if (displayName !== user?.display_name) body.display_name = displayName;
             if (Object.keys(body).length === 0) { showMsg(isChinese ? '没有变更' : 'No changes', 'error'); setSaving(false); return; }
             const res = await fetch('/api/auth/me', {
@@ -131,6 +133,7 @@ function AccountSettingsModal({ user, onClose, isChinese }: { user: any; onClose
                 <h4 style={{ margin: '0 0 12px', fontSize: '13px', color: 'var(--text-secondary)' }}>{isChinese ? '个人信息' : 'Profile'}</h4>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '20px' }}>
                     <div><label style={labelStyle}>{isChinese ? '用户名' : 'Username'}</label><input className="form-input" value={username} onChange={e => setUsername(e.target.value)} style={inputStyle} /></div>
+                    <div><label style={labelStyle}>{isChinese ? '邮箱' : 'Email'}</label><input className="form-input" type="email" value={email} onChange={e => setEmail(e.target.value)} style={inputStyle} /></div>
                     <div><label style={labelStyle}>{isChinese ? '显示名称' : 'Display Name'}</label><input className="form-input" value={displayName} onChange={e => setDisplayName(e.target.value)} style={inputStyle} /></div>
                     <div style={{ display: 'flex', justifyContent: 'flex-end' }}><button className="btn btn-primary" onClick={handleSaveProfile} disabled={saving} style={{ padding: '6px 16px', fontSize: '12px' }}>{saving ? '...' : (isChinese ? '保存' : 'Save')}</button></div>
                 </div>
