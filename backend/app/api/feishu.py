@@ -459,13 +459,16 @@ async def process_feishu_event(agent_id: uuid.UUID, body: dict, db: AsyncSession
 
             # ── Find-or-create a ChatSession via external_conv_id (DB-based, no cache needed) ──
             from datetime import datetime as _dt, timezone as _tz
+            _is_group = (chat_type == "group")
             _sess = await find_or_create_channel_session(
                 db=db,
                 agent_id=agent_id,
-                user_id=platform_user_id,
+                user_id=platform_user_id if not _is_group else creator_id,
                 external_conv_id=conv_id,
                 source_channel="feishu",
                 first_message_title=user_text,
+                is_group=_is_group,
+                group_name=f"Feishu Group {chat_id[:8]}" if _is_group else None,
             )
             session_conv_id = str(_sess.id)
 
@@ -860,10 +863,19 @@ async def _handle_feishu_file(db, agent_id, config, message, sender_open_id, cha
             conv_id = f"feishu_p2p_{sender_user_id_feishu or sender_open_id}"
 
         # Find-or-create session
+        _is_group_file = (chat_type == "group")
+        # For group file sessions, use agent creator as placeholder user_id
+        _file_user_id = platform_user_id
+        if _is_group_file:
+            _ag_r = await db.execute(_select(AgentModel).where(AgentModel.id == agent_id))
+            _ag_obj = _ag_r.scalar_one_or_none()
+            _file_user_id = _ag_obj.creator_id if _ag_obj else platform_user_id
         _sess = await find_or_create_channel_session(
-            db=db, agent_id=agent_id, user_id=platform_user_id,
+            db=db, agent_id=agent_id, user_id=_file_user_id,
             external_conv_id=conv_id, source_channel="feishu",
             first_message_title=f"[文件] {filename}",
+            is_group=_is_group_file,
+            group_name=f"Feishu Group {chat_id[:8]}" if _is_group_file else None,
         )
         session_conv_id = str(_sess.id)
 
@@ -1039,17 +1051,23 @@ async def _call_agent_llm(db: AsyncSession, agent_id: uuid.UUID, user_text: str,
     if is_agent_expired(agent):
         return "This Agent has expired and is off duty. Please contact your admin to extend its service."
 
-    # Load primary model
+    # Load primary model (skip if disabled by admin)
     model = None
     if agent.primary_model_id:
         model_result = await db.execute(select(LLMModel).where(LLMModel.id == agent.primary_model_id))
         model = model_result.scalar_one_or_none()
+        if model and not model.enabled:
+            logger.info(f"[Channel] Primary model {model.model} is disabled, skipping")
+            model = None
 
-    # Load fallback model
+    # Load fallback model (skip if disabled by admin)
     fallback_model = None
     if agent.fallback_model_id:
         fb_result = await db.execute(select(LLMModel).where(LLMModel.id == agent.fallback_model_id))
         fallback_model = fb_result.scalar_one_or_none()
+        if fallback_model and not fallback_model.enabled:
+            logger.info(f"[Channel] Fallback model {fallback_model.model} is disabled, skipping")
+            fallback_model = None
 
     # Config-level fallback: primary missing -> use fallback
     if not model and fallback_model:

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router-dom';
 import MarkdownRenderer from '../components/MarkdownRenderer';
+import AgentBayLivePanel, { LivePreviewState } from '../components/AgentBayLivePanel';
 import { agentApi, enterpriseApi } from '../services/api';
 import { useAuthStore } from '../stores';
 
@@ -72,6 +73,8 @@ export default function Chat() {
     const [streaming, setStreaming] = useState(false);
     const [isWaiting, setIsWaiting] = useState(false);
     const [attachedFile, setAttachedFile] = useState<{ name: string; text: string; path?: string; imageUrl?: string } | null>(null);
+    const [liveState, setLiveState] = useState<LivePreviewState>({});
+    const [livePanelVisible, setLivePanelVisible] = useState(false);
     const wsRef = useRef<WebSocket | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
@@ -168,6 +171,26 @@ export default function Chat() {
                 }
                 if (['error', 'quota_exceeded'].includes(data.type)) {
                     setStreaming(false);
+                }
+
+                // ── AgentBay live preview events ──
+                if (data.type === 'agentbay_live') {
+                    setLiveState(prev => {
+                        const next = { ...prev };
+                        if (data.env === 'desktop' && data.screenshot) {
+                            next.desktop = { screenshot: data.screenshot };
+                        } else if (data.env === 'browser' && data.screenshot) {
+                            next.browser = { screenshot: data.screenshot };
+                        } else if (data.env === 'code' && data.output) {
+                            // Append code output
+                            const existing = prev.code?.output || '';
+                            next.code = { output: existing + (existing ? '\n---\n' : '') + data.output };
+                        }
+                        return next;
+                    });
+                    // Auto-expand the live panel on first data
+                    setLivePanelVisible(true);
+                    return;
                 }
 
                 if (data.type === 'thinking') {
@@ -331,6 +354,8 @@ export default function Chat() {
         }
     };
 
+    const hasLiveData = !!(liveState.desktop || liveState.browser || liveState.code);
+
     return (
         <div>
             <div className="page-header">
@@ -348,7 +373,9 @@ export default function Chat() {
                 </div>
             </div>
 
-            <div className="chat-container">
+            <div className={`chat-container ${hasLiveData ? 'chat-with-live-panel' : ''}`}>
+                {/* Wrap chat area in a column so it coexists with the live panel in flex-row */}
+                <div className="chat-main">
                 <div className="chat-messages">
                     {messages.length === 0 && (
                         <div style={{ textAlign: 'center', padding: '60px', color: 'var(--text-tertiary)' }}>
@@ -385,7 +412,7 @@ export default function Chat() {
                                             color: 'rgba(147, 130, 220, 0.9)', fontWeight: 500,
                                             userSelect: 'none', display: 'flex', alignItems: 'center', gap: '4px',
                                         }}>
-                                            💭 Thinking
+                                            Thinking
                                         </summary>
                                         <div style={{
                                             padding: '4px 10px 8px',
@@ -499,7 +526,7 @@ export default function Chat() {
                         <button
                             onClick={() => setAttachedFile(null)}
                             style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', fontSize: '14px' }}
-                        >✕</button>
+                        >x</button>
                     </div>
                 )}
 
@@ -538,6 +565,16 @@ export default function Chat() {
                         </button>
                     )}
                 </div>
+                </div>
+
+                {/* AgentBay Live Preview Panel */}
+                {hasLiveData && (
+                    <AgentBayLivePanel
+                        liveState={liveState}
+                        visible={livePanelVisible}
+                        onToggle={() => setLivePanelVisible(v => !v)}
+                    />
+                )}
             </div>
         </div>
     );

@@ -387,7 +387,7 @@ select:focus {
   border-radius: var(--radius-md);
   font-size: var(--text-sm);
   color: var(--text-secondary);
-  transition: all 0.35s ease-in-out;
+  transition: all 0.25s ease-in-out;
   cursor: pointer;
   text-decoration: none;
   white-space: nowrap;
@@ -453,7 +453,7 @@ select:focus {
   padding: 3px;
   color: var(--text-tertiary);
   opacity: 0;
-  transition: opacity 0.35s ease-in-out, color 0.35s ease-in-out, background 0.35s ease-in-out;
+  transition: opacity 0.25s ease-in-out, color 0.25s ease-in-out, background 0.25s ease-in-out;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -497,6 +497,79 @@ select:focus {
   padding: var(--space-4) var(--space-5);
 }
 
+/* Collapse/expand toggle in logo row */
+.sidebar-collapse-btn {
+  transition: opacity 0.2s ease;
+}
+
+.sidebar.collapsed .sidebar-collapse-btn {
+  margin-left: 0 !important;
+}
+
+/* Account row trigger */
+.sidebar-account-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.sidebar-account-row:hover {
+  background: var(--bg-tertiary);
+}
+
+/* Account dropdown menu */
+.account-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 4px;
+  box-shadow: var(--shadow-lg);
+  z-index: 100;
+  animation: accountDropdownIn 0.15s ease;
+}
+
+@keyframes accountDropdownIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.account-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.account-dropdown-item:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.account-dropdown-danger {
+  color: var(--error);
+}
+
+.account-dropdown-danger:hover {
+  background: var(--error-subtle);
+  color: var(--error);
+}
+
 .main-content {
   margin-left: var(--sidebar-width);
   flex: 1;
@@ -517,6 +590,8 @@ select:focus {
 .sidebar.collapsed .sidebar-logo {
   justify-content: center;
   padding: var(--space-3) 0;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .sidebar.collapsed .sidebar-logo-text {
@@ -563,10 +638,17 @@ select:focus {
 .sidebar.collapsed .sidebar-footer-controls {
   flex-direction: column;
   gap: var(--space-2);
-  margin-bottom: 0 !important;
+  margin-bottom: 4px !important;
 }
 
-.sidebar.collapsed .sidebar-footer-user-info {
+.sidebar.collapsed .sidebar-account-row {
+  justify-content: center;
+  padding: var(--space-2) 0;
+}
+
+.sidebar.collapsed .sidebar-footer-user-info,
+.sidebar.collapsed .account-dropdown,
+.sidebar.collapsed .sidebar-account-row > svg {
   display: none;
 }
 
@@ -1376,6 +1458,237 @@ select:focus {
   display: flex;
   flex-direction: column;
   height: calc(100vh - 100px);
+}
+
+/* When live panel is active, switch to horizontal layout */
+.chat-container.chat-with-live-panel {
+  flex-direction: row;
+  gap: 0;
+}
+
+.chat-with-live-panel > .chat-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.chat-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ─── AgentBay Live Preview Panel ───────────────── */
+.live-panel {
+  width: 420px;
+  min-width: 360px;
+  max-width: 50vw;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
+  animation: livePanelSlideIn 250ms ease;
+}
+
+@keyframes livePanelSlideIn {
+  from { opacity: 0; transform: translateX(16px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.live-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-elevated);
+  flex-shrink: 0;
+}
+
+.live-panel-tabs {
+  display: flex;
+  gap: 2px;
+}
+
+.live-panel-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.live-panel-tab:hover {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.live-panel-tab.active {
+  color: var(--text-primary);
+  background: var(--bg-tertiary);
+}
+
+.live-panel-collapse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+
+.live-panel-collapse:hover {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+}
+
+.live-panel-content {
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+
+.live-panel-iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #000;
+}
+
+.live-panel-browser {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: auto;
+  background: var(--bg-primary);
+}
+
+.live-panel-screenshot {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.live-panel-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  backdrop-filter: blur(4px);
+}
+
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.6);
+  animation: livePulse 2s ease-in-out infinite;
+}
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.live-panel-code {
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 12px;
+  background: #0d1117;
+  color: #c9d1d9;
+}
+
+.live-panel-code pre {
+  margin: 0;
+  font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.live-panel-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 8px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+/* Collapsed toggle button (shown on the right edge) */
+.live-panel-toggle {
+  position: fixed;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 28px;
+  height: 56px;
+  border: 1px solid var(--border-subtle);
+  border-right: none;
+  border-radius: 8px 0 0 8px;
+  background: var(--bg-elevated);
+  color: var(--text-tertiary);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  transition: all 150ms ease;
+  z-index: 10;
+}
+
+.live-panel-toggle:hover {
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  width: 32px;
+}
+
+.live-panel-toggle-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.6);
+  animation: livePulse 2s ease-in-out infinite;
+}
+
+/* Responsive: hide live panel on narrow screens */
+@media (max-width: 900px) {
+  .live-panel {
+    display: none;
+  }
+  .live-panel-toggle {
+    display: none;
+  }
 }
 
 .chat-messages {

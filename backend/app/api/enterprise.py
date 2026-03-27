@@ -543,6 +543,8 @@ async def list_org_departments(
     ]
 
 
+from sqlalchemy import or_
+
 @router.get("/org/members")
 async def list_org_members(
     department_id: str | None = None,
@@ -558,7 +560,13 @@ async def list_org_members(
     if department_id:
         query = query.where(OrgMember.department_id == uuid.UUID(department_id))
     if search:
-        query = query.where(OrgMember.name.ilike(f"%{search}%"))
+        query = query.where(
+            or_(
+                OrgMember.name.ilike(f"%{search}%"),
+                OrgMember.name_translit_full.ilike(f"%{search}%"),
+                OrgMember.name_translit_initial.ilike(f"%{search}%"),
+            )
+        )
     query = query.order_by(OrgMember.name).limit(100)
     result = await db.execute(query)
     members = result.scalars().all()

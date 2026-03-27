@@ -1104,6 +1104,7 @@ export default function EnterpriseSettings() {
             title: 'AgentBay Settings',
             fields: [
                 { key: 'api_key', label: 'API Key (from AgentBay)', type: 'password', placeholder: 'Enter your AgentBay API key' },
+                { key: 'os_type', label: 'Cloud Computer OS', type: 'select', default: 'windows', options: [{ value: 'linux', label: 'Linux' }, { value: 'windows', label: 'Windows' }] },
             ],
         },
     };
@@ -1330,35 +1331,12 @@ export default function EnterpriseSettings() {
                                     </div>
                                     <div className="form-group">
                                         <label className="form-label">{t('enterprise.llm.model')}</label>
-                                        <div style={{ display: 'flex', gap: '8px' }}>
-                                            <select 
-                                                className="form-input" 
-                                                value={(!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') ? 'custom' : modelForm.model} 
-                                                onChange={e => {
-                                                    if (e.target.value === 'custom') {
-                                                        setModelForm({ ...modelForm, model: '' });
-                                                    } else {
-                                                        setModelForm({ ...modelForm, model: e.target.value });
-                                                    }
-                                                }}
-                                                style={{ flex: (!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') ? '1' : '100%' }}
-                                            >
-                                                <option value="" disabled>Select a model</option>
-                                                {(PRESET_MODELS[modelForm.provider] || []).map(m => (
-                                                    <option key={m} value={m}>{m}</option>
-                                                ))}
-                                                <option value="custom">Custom (Type manually)</option>
-                                            </select>
-                                            {(!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') && (
-                                                <input 
-                                                    className="form-input" 
-                                                    placeholder="Type model name" 
-                                                    value={modelForm.model} 
-                                                    onChange={e => setModelForm({ ...modelForm, model: e.target.value })} 
-                                                    style={{ flex: '2' }}
-                                                />
-                                            )}
-                                        </div>
+                                        <input 
+                                            className="form-input" 
+                                            placeholder={t('enterprise.llm.modelPlaceholder', 'e.g. claude-sonnet-4-20250514')}
+                                            value={modelForm.model} 
+                                            onChange={e => setModelForm({ ...modelForm, model: e.target.value })} 
+                                        />
                                     </div>
                                     <div className="form-group">
                                         <label className="form-label">{t('enterprise.llm.label')}</label>
@@ -1456,35 +1434,12 @@ export default function EnterpriseSettings() {
                                                 </div>
                                                 <div className="form-group">
                                                     <label className="form-label">{t('enterprise.llm.model')}</label>
-                                                    <div style={{ display: 'flex', gap: '8px' }}>
-                                                        <select 
-                                                            className="form-input" 
-                                                            value={(!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') ? 'custom' : modelForm.model} 
-                                                            onChange={e => {
-                                                                if (e.target.value === 'custom') {
-                                                                    setModelForm({ ...modelForm, model: '' });
-                                                                } else {
-                                                                    setModelForm({ ...modelForm, model: e.target.value });
-                                                                }
-                                                            }}
-                                                            style={{ flex: (!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') ? '1' : '100%' }}
-                                                        >
-                                                            <option value="" disabled>Select a model</option>
-                                                            {(PRESET_MODELS[modelForm.provider] || []).map(m => (
-                                                                <option key={m} value={m}>{m}</option>
-                                                            ))}
-                                                            <option value="custom">Custom (Type manually)</option>
-                                                        </select>
-                                                        {(!PRESET_MODELS[modelForm.provider]?.includes(modelForm.model) && modelForm.model !== '') && (
-                                                            <input 
-                                                                className="form-input" 
-                                                                placeholder="Type model name" 
-                                                                value={modelForm.model} 
-                                                                onChange={e => setModelForm({ ...modelForm, model: e.target.value })} 
-                                                                style={{ flex: '2' }}
-                                                            />
-                                                        )}
-                                                    </div>
+                                                    <input 
+                                                        className="form-input" 
+                                                        placeholder={t('enterprise.llm.modelPlaceholder', 'e.g. claude-sonnet-4-20250514')}
+                                                        value={modelForm.model} 
+                                                        onChange={e => setModelForm({ ...modelForm, model: e.target.value })} 
+                                                    />
                                                 </div>
                                                 <div className="form-group">
                                                     <label className="form-label">{t('enterprise.llm.label')}</label>
@@ -1568,10 +1523,33 @@ export default function EnterpriseSettings() {
                                                 </div>
                                             </div>
                                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                                <span className={`badge ${m.enabled ? 'badge-success' : 'badge-warning'}`}>
-                                                    {m.enabled ? t('enterprise.llm.enabled') : t('enterprise.llm.disabled')}
-                                                </span>
-                                                {m.supports_vision && <span className="badge" style={{ background: 'rgba(99,102,241,0.15)', color: 'rgb(99,102,241)', fontSize: '10px' }}>👁 Vision</span>}
+                                                {/* Toggle switch for enabled/disabled */}
+                                                <button
+                                                    onClick={async () => {
+                                                        try {
+                                                            const token = localStorage.getItem('token');
+                                                            await fetch(`/api/enterprise/llm-models/${m.id}`, {
+                                                                method: 'PUT',
+                                                                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                                                                body: JSON.stringify({ enabled: !m.enabled }),
+                                                            });
+                                                            qc.invalidateQueries({ queryKey: ['llm-models', selectedTenantId] });
+                                                        } catch (e) { console.error(e); }
+                                                    }}
+                                                    title={m.enabled ? t('enterprise.llm.clickToDisable', 'Click to disable') : t('enterprise.llm.clickToEnable', 'Click to enable')}
+                                                    style={{
+                                                        position: 'relative', width: '36px', height: '20px', borderRadius: '10px', border: 'none', cursor: 'pointer', transition: 'background 0.2s',
+                                                        background: m.enabled ? 'var(--success, #00b478)' : 'var(--bg-tertiary, #444)',
+                                                        padding: 0, flexShrink: 0,
+                                                    }}
+                                                >
+                                                    <span style={{
+                                                        position: 'absolute', left: m.enabled ? '18px' : '2px', top: '2px',
+                                                        width: '16px', height: '16px', borderRadius: '50%', background: '#fff',
+                                                        transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                                                    }} />
+                                                </button>
+                                                {m.supports_vision && <span className="badge" style={{ background: 'rgba(99,102,241,0.15)', color: 'rgb(99,102,241)', fontSize: '10px' }}>Vision</span>}
                                                 <button className="btn btn-ghost" onClick={() => {
                                                     setEditingModelId(m.id);
                                                     setModelForm({ provider: m.provider, model: m.model, label: m.label, base_url: m.base_url || '', api_key: m.api_key_masked || '', supports_vision: m.supports_vision || false, max_output_tokens: m.max_output_tokens ? String(m.max_output_tokens) : '', temperature: m.temperature !== null && m.temperature !== undefined ? String(m.temperature) : '' });
@@ -1989,27 +1967,64 @@ export default function EnterpriseSettings() {
                                                                     <span style={{ fontWeight: 500, fontSize: '13px' }}>{tool.name}</span>
                                                                     <div style={{ fontSize: '11px', color: 'var(--text-tertiary)' }}>{tool.description?.slice(0, 80)}</div>
                                                                 </div>
-                                                                <button className="btn btn-primary" style={{ padding: '4px 10px', fontSize: '11px' }} onClick={async () => {
-                                                                    await fetchJson('/tools', {
-                                                                        method: 'POST', body: JSON.stringify({
-                                                                            name: `mcp_${tool.name}`,
-                                                                            display_name: tool.name,
-                                                                            description: tool.description || '',
-                                                                            type: 'mcp',
-                                                                            category: 'custom',
-                                                                            icon: '·',
-                                                                            mcp_server_url: mcpForm.server_url,
-                                                                            mcp_server_name: mcpForm.server_name || mcpForm.server_url,
-                                                                            mcp_tool_name: tool.name,
-                                                                            parameters_schema: tool.inputSchema || {},
-                                                                            is_default: false,
-                                                                        })
-                                                                    });
-                                                                    loadAllTools();
-                                                                    setShowAddMCP(false); setMcpTestResult(null); setMcpForm({ server_url: '', server_name: '' }); setMcpRawInput('');
-                                                                }}>{t('enterprise.tools.importAll')}</button>
+                                                                <button className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '11px' }} onClick={async () => {
+                                                                    try {
+                                                                        await fetchJson('/tools', {
+                                                                            method: 'POST', body: JSON.stringify({
+                                                                                name: `mcp_${tool.name}`,
+                                                                                display_name: tool.name,
+                                                                                description: tool.description || '',
+                                                                                type: 'mcp',
+                                                                                category: 'custom',
+                                                                                icon: '·',
+                                                                                mcp_server_url: mcpForm.server_url,
+                                                                                mcp_server_name: mcpForm.server_name || mcpForm.server_url,
+                                                                                mcp_tool_name: tool.name,
+                                                                                parameters_schema: tool.inputSchema || {},
+                                                                                is_default: false,
+                                                                            })
+                                                                        });
+                                                                        loadAllTools();
+                                                                    } catch (e: any) {
+                                                                        alert(`${t('enterprise.tools.importFailed') || 'Import failed'}: ${e.message}`);
+                                                                    }
+                                                                }}>{t('enterprise.tools.import') || 'Import'}</button>
                                                             </div>
                                                         ))}
+                                                        <div style={{ marginTop: '10px', display: 'flex', justifyContent: 'flex-end' }}>
+                                                            <button className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '12px' }} onClick={async () => {
+                                                                const tools = mcpTestResult.tools || [];
+                                                                let successCount = 0;
+                                                                const errors: string[] = [];
+                                                                for (const tool of tools) {
+                                                                    try {
+                                                                        await fetchJson('/tools', {
+                                                                            method: 'POST', body: JSON.stringify({
+                                                                                name: `mcp_${tool.name}`,
+                                                                                display_name: tool.name,
+                                                                                description: tool.description || '',
+                                                                                type: 'mcp',
+                                                                                category: 'custom',
+                                                                                icon: '·',
+                                                                                mcp_server_url: mcpForm.server_url,
+                                                                                mcp_server_name: mcpForm.server_name || mcpForm.server_url,
+                                                                                mcp_tool_name: tool.name,
+                                                                                parameters_schema: tool.inputSchema || {},
+                                                                                is_default: false,
+                                                                            })
+                                                                        });
+                                                                        successCount++;
+                                                                    } catch (e: any) {
+                                                                        errors.push(`${tool.name}: ${e.message}`);
+                                                                    }
+                                                                }
+                                                                loadAllTools();
+                                                                setShowAddMCP(false); setMcpTestResult(null); setMcpForm({ server_url: '', server_name: '' }); setMcpRawInput('');
+                                                                if (errors.length > 0) {
+                                                                    alert(`Imported ${successCount}/${tools.length} tools.\nFailed:\n${errors.join('\n')}`);
+                                                                }
+                                                            }}>{t('enterprise.tools.importAll')}</button>
+                                                        </div>
                                                     </div>
                                                 ) : (
                                                     <div style={{ color: 'var(--danger)' }}>{t('enterprise.tools.connectionFailed')}: {mcpTestResult.error}</div>

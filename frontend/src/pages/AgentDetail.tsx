@@ -55,7 +55,8 @@ function ToolsManager({ agentId, canManage = false }: { agentId: string; canMana
         agentbay: {
             title: 'AgentBay Settings',
             fields: [
-                { key: 'api_key', label: 'API Key (from AgentBay)', type: 'password', placeholder: 'Enter your AgentBay API key' }
+                { key: 'api_key', label: 'API Key (from AgentBay)', type: 'password', placeholder: 'Enter your AgentBay API key' },
+                { key: 'os_type', label: 'Cloud Computer OS', type: 'select', default: 'windows', options: [{ value: 'linux', label: 'Linux' }, { value: 'windows', label: 'Windows' }] },
             ]
         },
         atlassian: {
@@ -3964,10 +3965,18 @@ function AgentDetailInner() {
                                                 onChange={(e) => setSettingsForm(f => ({ ...f, primary_model_id: e.target.value }))}
                                             >
                                                 <option value="">--</option>
-                                                {llmModels.map((m: any) => (
-                                                    <option key={m.id} value={m.id}>{m.label} ({m.provider}/{m.model})</option>
+                                                {llmModels.filter((m: any) => m.enabled || m.id === settingsForm.primary_model_id).map((m: any) => (
+                                                    <option key={m.id} value={m.id}>
+                                                        {m.label} ({m.provider}/{m.model}){!m.enabled ? ` [${t('enterprise.llm.disabled', 'Disabled')}]` : ''}
+                                                    </option>
                                                 ))}
                                             </select>
+                                            {/* Warning if selected model is disabled */}
+                                            {settingsForm.primary_model_id && llmModels.some((m: any) => m.id === settingsForm.primary_model_id && !m.enabled) && (
+                                                <div style={{ fontSize: '11px', color: 'var(--error)', marginTop: '4px' }}>
+                                                    {t('agent.settings.modelDisabledWarning', 'This model has been disabled by admin. The agent will automatically use the fallback model.')}
+                                                </div>
+                                            )}
                                             <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>{t('agent.settings.primaryModel')}</div>
                                         </div>
                                         <div>
@@ -3978,10 +3987,18 @@ function AgentDetailInner() {
                                                 onChange={(e) => setSettingsForm(f => ({ ...f, fallback_model_id: e.target.value }))}
                                             >
                                                 <option value="">--</option>
-                                                {llmModels.map((m: any) => (
-                                                    <option key={m.id} value={m.id}>{m.label} ({m.provider}/{m.model})</option>
+                                                {llmModels.filter((m: any) => m.enabled || m.id === settingsForm.fallback_model_id).map((m: any) => (
+                                                    <option key={m.id} value={m.id}>
+                                                        {m.label} ({m.provider}/{m.model}){!m.enabled ? ` [${t('enterprise.llm.disabled', 'Disabled')}]` : ''}
+                                                    </option>
                                                 ))}
                                             </select>
+                                            {/* Warning if selected fallback model is disabled */}
+                                            {settingsForm.fallback_model_id && llmModels.some((m: any) => m.id === settingsForm.fallback_model_id && !m.enabled) && (
+                                                <div style={{ fontSize: '11px', color: 'var(--error)', marginTop: '4px' }}>
+                                                    {t('agent.settings.modelDisabledWarning', 'This model has been disabled by admin. The agent will automatically use the fallback model.')}
+                                                </div>
+                                            )}
                                             <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '4px' }}>{t('agent.settings.fallbackModel')}</div>
                                         </div>
                                     </div>

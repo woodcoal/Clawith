@@ -10,6 +10,7 @@ import httpx
 from loguru import logger
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
+from pypinyin import pinyin, Style
 
 from app.database import async_session
 from app.models.org import OrgDepartment, OrgMember
@@ -285,6 +286,8 @@ class OrgSyncService:
 
                         if member:
                             member.name = u.get("name", member.name)
+                            member.name_translit_full = "".join([i[0] for i in pinyin(member.name, style=Style.NORMAL)])
+                            member.name_translit_initial = "".join([i[0] for i in pinyin(member.name, style=Style.FIRST_LETTER)])
                             member.email = u.get("email", member.email)
                             member.avatar_url = u.get("avatar", {}).get("avatar_origin", member.avatar_url)
                             member.title = (u.get("job_title") or u.get("description") or member.title or "")[:200]
@@ -298,10 +301,15 @@ class OrgSyncService:
                                 member.feishu_user_id = user_id
                             member.synced_at = now
                         else:
+                            new_name = u.get("name", "")
+                            translit_full = "".join([i[0] for i in pinyin(new_name, style=Style.NORMAL)]) if new_name else ""
+                            translit_initial = "".join([i[0] for i in pinyin(new_name, style=Style.FIRST_LETTER)]) if new_name else ""
                             member = OrgMember(
                                 feishu_open_id=open_id or None,
                                 feishu_user_id=user_id or None,
-                                name=u.get("name", ""),
+                                name=new_name,
+                                name_translit_full=translit_full,
+                                name_translit_initial=translit_initial,
                                 email=u.get("email", ""),
                                 avatar_url=u.get("avatar", {}).get("avatar_origin", ""),
                                 title=(u.get("job_title") or u.get("description") or "")[:200],

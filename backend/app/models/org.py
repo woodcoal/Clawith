@@ -36,6 +36,8 @@ class OrgMember(Base):
     feishu_open_id: Mapped[str | None] = mapped_column(String(100), unique=True)
     feishu_user_id: Mapped[str | None] = mapped_column(String(100))
     name: Mapped[str] = mapped_column(String(100), nullable=False)
+    name_translit_full: Mapped[str | None] = mapped_column(String(255), index=True)
+    name_translit_initial: Mapped[str | None] = mapped_column(String(50), index=True)
     email: Mapped[str | None] = mapped_column(String(200))
     avatar_url: Mapped[str | None] = mapped_column(String(500))
     title: Mapped[str] = mapped_column(String(200), default="")
