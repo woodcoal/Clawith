@@ -526,8 +526,7 @@ function OrgTab({ tenant }: { tenant: any }) {
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            {/* 0. SSO Status Section */}
-            <SsoStatus />
+            {/* SSO status is now derived from per-channel toggles — no global switch */}
 
             {/* 1. Identity Providers Section */}
             <div className="card" style={{ padding: '0', overflow: 'hidden' }}>
@@ -580,6 +579,120 @@ function OrgTab({ tenant }: { tenant: any }) {
                                 {isExpanded && (
                                     <div style={{ padding: '0 20px 20px', background: 'var(--bg-secondary)' }}>
                                         {renderForm(idp.type, existingProvider)}
+
+                                        {/* Per-channel SSO Login toggle — only for configured, sync-capable providers */}
+                                        {existingProvider && ['feishu', 'dingtalk', 'wecom'].includes(idp.type) && (() => {
+                                            const ssoEnabled = !!existingProvider.sso_login_enabled;
+                                            const slug = tenant?.slug || '';
+                                            const domain = tenant?.sso_domain || (slug ? `${slug}.clawith.ai` : '');
+                                            const callbackUrl = domain ? `https://${domain}/api/auth/${idp.type}/callback` : '';
+
+                                            const handleSsoToggle = async () => {
+                                                const newVal = !ssoEnabled;
+                                                try {
+                                                    await fetchJson(`/enterprise/identity-providers/${existingProvider.id}`, {
+                                                        method: 'PUT',
+                                                        body: JSON.stringify({ sso_login_enabled: newVal }),
+                                                    });
+                                                    qc.invalidateQueries({ queryKey: ['identity-providers'] });
+                                                    // Refresh tenant data so sso_domain updates in UI
+                                                    if (tenant?.id) qc.invalidateQueries({ queryKey: ['tenant', tenant.id] });
+                                                } catch (e) {
+                                                    console.error('Failed to toggle SSO:', e);
+                                                }
+                                            };
+
+                                            return (
+                                                <div style={{ marginTop: '20px', paddingTop: '20px', borderTop: '1px dashed var(--border-subtle)' }}>
+                                                    {/* SSO Toggle */}
+                                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: ssoEnabled ? '16px' : 0 }}>
+                                                        <div>
+                                                            <div style={{ fontWeight: 500, fontSize: '13px' }}>{t('enterprise.identity.ssoLoginToggle', 'SSO Login')}</div>
+                                                            <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginTop: '2px' }}>
+                                                                {t('enterprise.identity.ssoLoginToggleHint', 'Allow users to log in via this identity provider.')}
+                                                            </div>
+                                                        </div>
+                                                        <label style={{ position: 'relative', display: 'inline-block', width: '36px', height: '20px', flexShrink: 0 }}>
+                                                            <input
+                                                                type="checkbox"
+                                                                checked={ssoEnabled}
+                                                                onChange={handleSsoToggle}
+                                                                style={{ opacity: 0, width: 0, height: 0 }}
+                                                            />
+                                                            <span style={{
+                                                                position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+                                                                borderRadius: '20px', cursor: 'pointer',
+                                                                background: ssoEnabled ? 'var(--accent-primary)' : 'var(--border-subtle)',
+                                                                transition: '0.2s'
+                                                            }}>
+                                                                <span style={{
+                                                                    position: 'absolute', left: ssoEnabled ? '18px' : '2px', top: '2px',
+                                                                    width: '16px', height: '16px', borderRadius: '50%',
+                                                                    background: '#fff', transition: '0.2s',
+                                                                    boxShadow: '0 1px 2px rgba(0,0,0,0.1)'
+                                                                }} />
+                                                            </span>
+                                                        </label>
+                                                    </div>
+
+                                                    {/* Callback URL & domain info — shown when SSO is enabled */}
+                                                    {ssoEnabled && (
+                                                        <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                                            {/* Company subdomain */}
+                                                            <div>
+                                                                <label className="form-label" style={{ fontSize: '11px', marginBottom: '4px', color: 'var(--text-secondary)' }}>
+                                                                    {t('enterprise.identity.ssoSubdomain', 'SSO Login URL')}
+                                                                </label>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                    <input
+                                                                        className="form-input"
+                                                                        readOnly
+                                                                        value={domain ? `https://${domain}` : 'Generating...'}
+                                                                        style={{ fontSize: '12px', flex: 1, maxWidth: '400px', background: 'var(--bg-primary)', cursor: 'default' }}
+                                                                    />
+                                                                    <button
+                                                                        className="btn btn-ghost btn-sm"
+                                                                        style={{ fontSize: '11px' }}
+                                                                        onClick={() => { navigator.clipboard.writeText(`https://${domain}`); }}
+                                                                    >
+                                                                        {t('common.copy', 'Copy')}
+                                                                    </button>
+                                                                </div>
+                                                                <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                                                                    {t('enterprise.identity.ssoSubdomainHint', 'Share this URL with your team. SSO login buttons will appear when they visit this address.')}
+                                                                </div>
+                                                            </div>
+
+                                                            {/* Callback URL */}
+                                                            <div>
+                                                                <label className="form-label" style={{ fontSize: '11px', marginBottom: '4px', color: 'var(--text-secondary)' }}>
+                                                                    {t('enterprise.identity.callbackUrl', 'Redirect URL (paste this in your app settings)')}
+                                                                </label>
+                                                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                                                    <input
+                                                                        className="form-input"
+                                                                        readOnly
+                                                                        value={callbackUrl}
+                                                                        style={{ fontSize: '12px', flex: 1, maxWidth: '400px', background: 'var(--bg-primary)', cursor: 'default' }}
+                                                                    />
+                                                                    <button
+                                                                        className="btn btn-ghost btn-sm"
+                                                                        style={{ fontSize: '11px' }}
+                                                                        onClick={() => { navigator.clipboard.writeText(callbackUrl); }}
+                                                                    >
+                                                                        {t('common.copy', 'Copy')}
+                                                                    </button>
+                                                                </div>
+                                                                <div style={{ fontSize: '10px', color: 'var(--text-tertiary)', marginTop: '4px' }}>
+                                                                    {t('enterprise.identity.callbackUrlHint', 'Add this URL as the OAuth redirect URI in your identity provider\'s app configuration.')}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
+
                                         {existingProvider && renderOrgBrowser(existingProvider)}
                                     </div>
                                 )}
