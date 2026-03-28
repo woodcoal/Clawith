@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 /* ── Types ── */
 export interface LivePreviewState {
-    desktop?: { screenshot: string };
-    browser?: { screenshot: string };
+    desktop?: { screenshotUrl: string };
+    browser?: { screenshotUrl: string };
     code?: { output: string };
 }
 
@@ -52,8 +52,13 @@ const ExpandIcon = (
 
 type TabType = 'desktop' | 'browser' | 'code';
 
+/* ── Constants for resize constraints ── */
+const MIN_WIDTH = 300;  // minimum panel width in px
+const MAX_WIDTH_VW = 0.65; // maximum panel width as fraction of viewport width
+
 export default function AgentBayLivePanel({ liveState, visible, onToggle }: Props) {
     const { t } = useTranslation();
+
     // Determine available tabs from live state
     const availableTabs: TabType[] = [];
     if (liveState.desktop) availableTabs.push('desktop');
@@ -62,6 +67,12 @@ export default function AgentBayLivePanel({ liveState, visible, onToggle }: Prop
 
     const [activeTab, setActiveTab] = useState<TabType>('desktop');
     const codeEndRef = useRef<HTMLDivElement>(null);
+
+    // Resizable panel width state — starts at default 420px
+    const [panelWidth, setPanelWidth] = useState(420);
+    const isDragging = useRef(false);
+    const dragStartX = useRef(0);
+    const dragStartWidth = useRef(0);
 
     // Auto-switch to the most recently active tab
     useEffect(() => {
@@ -76,6 +87,43 @@ export default function AgentBayLivePanel({ liveState, visible, onToggle }: Prop
             codeEndRef.current?.scrollIntoView({ behavior: 'smooth' });
         }
     }, [liveState.code?.output]);
+
+    /* ── Drag logic for the left resize handle ── */
+    const handleDragMouseDown = useCallback((e: React.MouseEvent) => {
+        e.preventDefault();
+        isDragging.current = true;
+        dragStartX.current = e.clientX;
+        dragStartWidth.current = panelWidth;
+
+        // Set cursor state on body to prevent flicker while dragging
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+    }, [panelWidth]);
+
+    useEffect(() => {
+        const onMouseMove = (e: MouseEvent) => {
+            if (!isDragging.current) return;
+            // Moving left (smaller clientX) increases panel width
+            const delta = dragStartX.current - e.clientX;
+            const maxWidth = window.innerWidth * MAX_WIDTH_VW;
+            const newWidth = Math.min(maxWidth, Math.max(MIN_WIDTH, dragStartWidth.current + delta));
+            setPanelWidth(newWidth);
+        };
+
+        const onMouseUp = () => {
+            if (!isDragging.current) return;
+            isDragging.current = false;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        return () => {
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+    }, []);
 
     // Collapsed toggle button (shown when panel is hidden)
     if (!visible) {
@@ -99,7 +147,14 @@ export default function AgentBayLivePanel({ liveState, visible, onToggle }: Prop
     };
 
     return (
-        <div className="live-panel">
+        <div className="live-panel" style={{ width: `${panelWidth}px`, flexShrink: 0 }}>
+            {/* Drag handle on the left edge */}
+            <div
+                className="live-panel-resize-handle"
+                onMouseDown={handleDragMouseDown}
+                title="Drag to resize"
+            />
+
             {/* Header with tabs and collapse button */}
             <div className="live-panel-header">
                 <div className="live-panel-tabs">
@@ -124,7 +179,7 @@ export default function AgentBayLivePanel({ liveState, visible, onToggle }: Prop
                 {activeTab === 'desktop' && liveState.desktop && (
                     <div className="live-panel-browser">
                         <img
-                            src={liveState.desktop.screenshot}
+                            src={liveState.desktop.screenshotUrl}
                             alt="Desktop preview"
                             className="live-panel-screenshot"
                         />
@@ -138,7 +193,7 @@ export default function AgentBayLivePanel({ liveState, visible, onToggle }: Prop
                 {activeTab === 'browser' && liveState.browser && (
                     <div className="live-panel-browser">
                         <img
-                            src={liveState.browser.screenshot}
+                            src={liveState.browser.screenshotUrl}
                             alt="Browser preview"
                             className="live-panel-screenshot"
                         />

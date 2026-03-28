@@ -36,7 +36,7 @@ function formatDate(dt: string | null | undefined): string {
     return new Date(dt).toLocaleDateString(undefined, { year: 'numeric', month: '2-digit', day: '2-digit' });
 }
 
-type SortKey = 'name' | 'org_admin_email' | 'user_count' | 'agent_count' | 'total_tokens' | 'created_at';
+type SortKey = 'name' | 'sso_enabled' | 'org_admin_email' | 'user_count' | 'agent_count' | 'total_tokens' | 'created_at' | 'is_active';
 type SortDir = 'asc' | 'desc';
 
 const PAGE_SIZE = 15;
@@ -448,16 +448,17 @@ function CompaniesTab() {
 
     const columns: { key: SortKey; label: string; flex: string }[] = [
         { key: 'name', label: t('admin.company', 'Company'), flex: '2fr' },
+        { key: 'sso_enabled', label: 'SSO', flex: '100px' },
         { key: 'org_admin_email', label: t('admin.orgAdmin', 'Admin Email'), flex: '1.5fr' },
-        { key: 'user_count', label: t('admin.users', 'Users'), flex: '80px' },
-        { key: 'agent_count', label: t('admin.agents', 'Agents'), flex: '80px' },
+        { key: 'user_count', label: t('admin.users', 'Users'), flex: '70px' },
+        { key: 'agent_count', label: t('admin.agents', 'Agents'), flex: '70px' },
         { key: 'total_tokens', label: t('admin.tokens', 'Token Usage'), flex: '100px' },
         { key: 'created_at', label: t('admin.createdAt', 'Created'), flex: '100px' },
+        { key: 'is_active', label: t('admin.status', 'Status'), flex: '100px' },
     ];
-    const statusColFlex = '80px';
     const actionColFlex = '80px';
 
-    const gridCols = columns.map(c => c.flex).join(' ') + ' ' + statusColFlex + ' ' + actionColFlex;
+    const gridCols = columns.map(c => c.flex).join(' ') + ' ' + actionColFlex;
 
     return (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
@@ -468,6 +469,7 @@ function CompaniesTab() {
                     color: '#fff', fontSize: '13px', zIndex: 9999, boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
                 }}>{toast.msg}</div>
             )}
+
 
             {/* Invitation Code Modal */}
             {createdCode && (
@@ -667,6 +669,25 @@ function CompaniesTab() {
                             <div style={{ fontWeight: 500 }}>{c.name}</div>
                             <div style={{ fontSize: '11px', color: 'var(--text-tertiary)', fontFamily: 'monospace' }}>{c.slug}</div>
                         </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '2px' }}>
+                            {c.sso_enabled ? (
+                                <>
+                                    <span style={{ color: 'var(--accent-primary)', fontSize: '14px' }} title="SSO Enabled">🛡️</span>
+                                    {c.sso_domain && (
+                                        <span style={{ 
+                                            fontSize: '9px', background: 'rgba(59,130,246,0.1)', 
+                                            color: 'var(--accent-primary)', padding: '1px 4px', 
+                                            borderRadius: '4px', maxWidth: '100px', 
+                                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'
+                                        }}>
+                                            {c.sso_domain}
+                                        </span>
+                                    )}
+                                </>
+                            ) : (
+                                <span style={{ color: 'var(--text-tertiary)', opacity: 0.3 }} title="SSO Disabled">—</span>
+                            )}
+                        </div>
                         <div style={{ fontSize: '12px', color: c.org_admin_email ? 'var(--text-primary)' : 'var(--text-tertiary)' }}>
                             {c.org_admin_email || '-'}
                         </div>
@@ -678,12 +699,12 @@ function CompaniesTab() {
                         <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
                             {formatDate(c.created_at)}
                         </div>
-                        <div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                             <span className={`badge ${c.is_active ? 'badge-success' : 'badge-error'}`} style={{ fontSize: '10px' }}>
                                 {c.is_active ? t('admin.active', 'Active') : t('admin.disabled', 'Disabled')}
                             </span>
                         </div>
-                        <div>
+                        <div style={{ display: 'flex', gap: '4px' }}>
                             <button
                                 className="btn btn-ghost"
                                 style={{
@@ -692,7 +713,7 @@ function CompaniesTab() {
                                     cursor: c.slug === 'default' ? 'not-allowed' : 'pointer',
                                     opacity: c.slug === 'default' ? 0.5 : 1,
                                 }}
-                                onClick={() => handleToggle(c.id, c.is_active)}
+                                onClick={() => handleToggle(c.id, !!c.is_active)}
                                 disabled={c.slug === 'default'}
                                 title={c.slug === 'default' ? t('admin.cannotDisableDefault', 'Cannot disable the default company — platform admin would be locked out') : undefined}
                             >
@@ -738,6 +759,99 @@ function CompaniesTab() {
                         </div>
                     </div>
                 )}
+            </div>
+        </div>
+    );
+}
+
+// ─── Edit Company Modal ───────────────────────────────
+function EditCompanyModal({ company, onClose, onUpdated }: { company: any, onClose: () => void, onUpdated: () => void }) {
+    const { t } = useTranslation();
+    const [ssoEnabled, setSsoEnabled] = useState(!!company.sso_enabled);
+    const [ssoDomain, setSsoDomain] = useState(company.sso_domain || '');
+    const [saving, setSaving] = useState(false);
+    const [error, setError] = useState('');
+
+    const handleSave = async () => {
+        setSaving(true);
+        setError('');
+        try {
+            await adminApi.updateCompany(company.id, {
+                sso_enabled: ssoEnabled,
+                sso_domain: ssoDomain.trim() || null,
+            });
+            onUpdated();
+            onClose();
+        } catch (e: any) {
+            setError(e.message || 'Failed to update');
+        }
+        setSaving(false);
+    };
+
+    return (
+        <div style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 10001,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            backdropFilter: 'blur(4px)',
+        }} onClick={onClose}>
+            <div className="card" style={{
+                padding: '24px', maxWidth: '440px', width: '90%',
+                boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+            }} onClick={e => e.stopPropagation()}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                    <h2 style={{ fontSize: '16px', fontWeight: 600 }}>
+                        {t('admin.editCompany', 'Edit Company')}: {company.name}
+                    </h2>
+                    <button onClick={onClose} style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-tertiary)' }}>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <line x1="18" y1="6" x2="6" y2="18" />
+                            <line x1="6" y1="6" x2="18" y2="18" />
+                        </svg>
+                    </button>
+                </div>
+                
+                <h3 style={{ fontSize: '13px', fontWeight: 600, marginBottom: '8px', color: 'var(--text-secondary)' }}>
+                    {t('admin.ssoConfigTitle', 'SSO & Domain Configuration')}
+                </h3>
+                <p style={{ fontSize: '11px', color: 'var(--text-tertiary)', marginBottom: '16px', lineHeight: '1.4' }}>
+                    {t('admin.ssoConfigDesc', 'Configure SSO and custom domain for this company.')}
+                </p>
+
+                <div style={{ marginBottom: '16px', background: 'var(--bg-secondary)', padding: '12px', borderRadius: '8px', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ marginBottom: '12px' }}>
+                        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', fontSize: '13px', fontWeight: 500 }}>
+                            <input
+                                type="checkbox"
+                                checked={ssoEnabled}
+                                onChange={e => setSsoEnabled(e.target.checked)}
+                                style={{ width: '16px', height: '16px', cursor: 'pointer' }}
+                            />
+                            {t('admin.ssoEnabled', 'Enable SSO')}
+                        </label>
+                    </div>
+
+                    <div>
+                        <label className="form-label" style={{ fontSize: '12px', marginBottom: '4px' }}>{t('admin.ssoDomain', 'Custom Access Domain')}</label>
+                        <input
+                            className="form-input"
+                            value={ssoDomain}
+                            onChange={e => setSsoDomain(e.target.value)}
+                            placeholder={t('admin.ssoDomainPlaceholder', 'e.g. acme.clawith.com')}
+                            style={{ fontSize: '13px' }}
+                        />
+                    </div>
+                </div>
+
+                {error && <div style={{ color: 'var(--error)', fontSize: '12px', marginBottom: '16px', textAlign: 'center' }}>{error}</div>}
+
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <button className="btn btn-secondary" style={{ flex: 1 }} onClick={onClose} disabled={saving}>
+                        {t('common.cancel', 'Cancel')}
+                    </button>
+                    <button className="btn btn-primary" style={{ flex: 1 }} onClick={handleSave} disabled={saving}>
+                        {saving ? t('common.loading') : t('common.save', 'Save')}
+                    </button>
+                </div>
             </div>
         </div>
     );

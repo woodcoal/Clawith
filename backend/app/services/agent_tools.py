@@ -27,6 +27,7 @@ from sqlalchemy import select
 from app.database import async_session
 from app.models.task import Task
 from app.config import get_settings
+from app.services.auth_registry import auth_provider_registry
 
 _settings = get_settings()
 WORKSPACE_ROOT = Path(_settings.AGENT_DATA_DIR)
@@ -359,6 +360,36 @@ AGENT_TOOLS = [
                     },
                 },
                 "required": ["message"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_channel_message",
+            "description": (
+                "Send a message to a colleague via their configured channel (Feishu, DingTalk, WeCom). "
+                "Automatically detects the recipient's channel based on their org relationship. "
+                "Use this as the primary method to send messages to colleagues in your relationship network."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "member_name": {
+                        "type": "string",
+                        "description": "Recipient's name as shown in relationships, e.g. '张三'. Must be a person in your relationship network.",
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "Message content to send",
+                    },
+                    "channel": {
+                        "type": "string",
+                        "description": "Optional: Specific channel to use (feishu, dingtalk, wecom). Use this if multiple people have the same name in different channels.",
+                        "enum": ["feishu", "dingtalk", "wecom"]
+                    },
+                },
+                "required": ["member_name", "message"],
             },
         },
     },
@@ -1150,6 +1181,11 @@ _ALWAYS_INCLUDE_CORE = {
     "send_channel_file",
     "send_file_to_agent",
     "write_file",
+    "send_channel_message",
+}
+# Channel message tool - available when any channel (Feishu/DingTalk/WeCom) is configured
+_CHANNEL_MESSAGE_TOOL_NAMES = {
+    "send_channel_message",
 }
 # Feishu tools are ONLY included when the agent has a configured Feishu channel,
 # to avoid exposing unnecessary tools to non-Feishu agents (reduces hallucination risk).
@@ -1168,6 +1204,7 @@ _FEISHU_TOOL_NAMES = {
 }
 _always_core_tools = [t for t in AGENT_TOOLS if t["function"]["name"] in _ALWAYS_INCLUDE_CORE]
 _feishu_tools = [t for t in AGENT_TOOLS if t["function"]["name"] in _FEISHU_TOOL_NAMES]
+_channel_tools = [t for t in AGENT_TOOLS if t["function"]["name"] in _CHANNEL_MESSAGE_TOOL_NAMES]
 
 
 async def _agent_has_feishu(agent_id: uuid.UUID) -> bool:
@@ -1187,17 +1224,35 @@ async def _agent_has_feishu(agent_id: uuid.UUID) -> bool:
         return False
 
 
+async def _agent_has_any_channel(agent_id: uuid.UUID) -> bool:
+    """Check if agent has any configured channel (Feishu/DingTalk/WeCom)."""
+    try:
+        from app.models.channel_config import ChannelConfig
+        async with async_session() as db:
+            r = await db.execute(
+                select(ChannelConfig).where(
+                    ChannelConfig.agent_id == agent_id,
+                    ChannelConfig.is_configured == True,
+                )
+            )
+            return r.scalar_one_or_none() is not None
+    except Exception:
+        return False
+
+
 # ─── Dynamic Tool Loading from DB ──────────────────────────────
 
 async def get_agent_tools_for_llm(agent_id: uuid.UUID) -> list[dict]:
     """Load enabled tools for an agent from DB (OpenAI function-calling format).
-    
+
     Falls back to hardcoded AGENT_TOOLS if DB not ready.
     Always includes core system tools (send_channel_file, write_file).
     Feishu tools are only included when the agent has a configured Feishu channel.
+    send_channel_message is included when any channel (Feishu/DingTalk/WeCom) is configured.
     """
     has_feishu = await _agent_has_feishu(agent_id)
-    _always_tools = _always_core_tools + (_feishu_tools if has_feishu else [])
+    has_any_channel = await _agent_has_any_channel(agent_id)
+    _always_tools = _always_core_tools + (_feishu_tools if has_feishu else []) + (_channel_tools if has_any_channel else [])
 
     try:
         from app.models.tool import Tool, AgentTool
@@ -1476,6 +1531,8 @@ async def execute_tool(
             result = await _send_feishu_message(agent_id, arguments)
         elif tool_name == "send_web_message":
             result = await _send_web_message(agent_id, arguments)
+        elif tool_name == "send_channel_message":
+            result = await _send_channel_message(agent_id, arguments)
         elif tool_name == "send_message_to_agent":
             result = await _send_message_to_agent(agent_id, arguments)
         elif tool_name == "send_file_to_agent":
@@ -1983,10 +2040,10 @@ async def _resolve_feishu_recipient(agent_id: uuid.UUID, config, member_name: st
         )
         for r in result.scalars().all():
             if r.member and r.member.name == member_name:
-                if r.member.feishu_user_id:
-                    return (r.member.feishu_user_id, "user_id")
-                if r.member.feishu_open_id:
-                    return (r.member.feishu_open_id, "open_id")
+                if r.member.external_id:
+                    return (r.member.external_id, "user_id")
+                if r.member.open_id:
+                    return (r.member.open_id, "open_id")
                 break
     return None
 
@@ -2717,13 +2774,13 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
 
         async with async_session() as db:
             # ── Shortcut: if caller provided user_id or open_id directly ──
+            config_result = await db.execute(
+                select(ChannelConfig).where(ChannelConfig.agent_id == agent_id, ChannelConfig.channel_type == "feishu")
+            )
+            config = config_result.scalar_one_or_none()
+            if not config:
+                return "❌ This agent has no Feishu channel configured"
             if (direct_user_id or direct_open_id) and not member_name:
-                config_result = await db.execute(
-                    select(ChannelConfig).where(ChannelConfig.agent_id == agent_id, ChannelConfig.channel_type == "feishu")
-                )
-                config = config_result.scalar_one_or_none()
-                if not config:
-                    return "❌ This agent has no Feishu channel configured"
                 import json as _j
                 # Prefer user_id over open_id
                 if direct_user_id:
@@ -2734,8 +2791,11 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
                         receive_id_type="user_id",
                     )
                     if resp.get("code") == 0:
+                        # Save to history session
+                        await _save_outgoing_to_feishu_session(direct_user_id or direct_open_id)
                         return f"✅ 消息已发送（user_id: {direct_user_id}）"
                     # Fallback to open_id if user_id fails
+                    logger.info(f"❌ 发送失败：{resp.get('msg')} (code {resp.get('code')})")
                     if direct_open_id:
                         resp = await feishu_service.send_message(
                             config.app_id, config.app_secret,
@@ -2744,6 +2804,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
                             receive_id_type="open_id",
                         )
                         if resp.get("code") == 0:
+                            await _save_outgoing_to_feishu_session(direct_open_id)
                             return f"✅ 消息已发送（open_id: {direct_open_id}）"
                     return f"❌ 发送失败：{resp.get('msg')} (code {resp.get('code')})"
                 else:
@@ -2754,7 +2815,9 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
                         receive_id_type="open_id",
                     )
                     if resp.get("code") == 0:
+                        await _save_outgoing_to_feishu_session(direct_open_id)
                         return f"✅ 消息已发送（open_id: {direct_open_id}）"
+                    logger.info(f"❌ 发送失败：{resp.get('msg')} (code {resp.get('code')})")
                     return f"❌ 发送失败：{resp.get('msg')} (code {resp.get('code')})"
 
             # Find the relationship member by name
@@ -2772,60 +2835,15 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
                     break
 
             if not target_member:
-                # ── Fallback: look up via feishu_user_search (contacts cache / OrgMember / User) ──
-                _search_result = await _feishu_user_search(agent_id, {"name": member_name})
-                # Prefer user_id over open_id
-                import re as _re_oid
-                _uid_match = _re_oid.search(r'user_id: `([A-Za-z0-9]+)`', _search_result)
-                _oid_match = _re_oid.search(r'open_id: `(ou_[A-Za-z0-9]+)`', _search_result)
-                _found_id = None
-                _found_id_type = None
-                if _uid_match:
-                    _found_id = _uid_match.group(1)
-                    _found_id_type = "user_id"
-                elif _oid_match:
-                    _found_id = _oid_match.group(1)
-                    _found_id_type = "open_id"
-                if _found_id:
-                    config_result = await db.execute(
-                        select(ChannelConfig).where(ChannelConfig.agent_id == agent_id, ChannelConfig.channel_type == "feishu")
-                    )
-                    config = config_result.scalar_one_or_none()
-                    if not config:
-                        return "❌ This agent has no Feishu channel configured"
-                    import json as _j2
-                    resp = await feishu_service.send_message(
-                        config.app_id, config.app_secret,
-                        receive_id=_found_id, msg_type="text",
-                        content=_j2.dumps({"text": message_text}, ensure_ascii=False),
-                        receive_id_type=_found_id_type,
-                    )
-                    if resp.get("code") == 0:
-                        return f"✅ 消息已成功发送给 {member_name}"
-                    return f"❌ 找到了 {member_name}（{_found_id_type}: {_found_id}）但发送失败：{resp.get('msg')} (code {resp.get('code')})"
-                # Could not find via any path
-                names = [r.member.name for r in rels if r.member]
-                return (
-                    f"❌ 未找到联系人「{member_name}」。\n"
-                    f"关系列表中的联系人：{', '.join(names) if names else '（空）'}\n"
-                    f"通讯录搜索结果：{_search_result[:200]}"
-                )
-
-            if not target_member.feishu_user_id and not target_member.feishu_open_id and not target_member.email and not target_member.phone:
+                logger.info(f"❌ {member_name} has no Feishu user_id in relationship")   
+                return f"❌ {member_name} 不是我的关系"
+                
+            logger.info(f"target_member={target_member.external_id}, {target_member.open_id}, {target_member.email}, {target_member.phone}")
+            if not target_member.external_id and not target_member.open_id and not target_member.email and not target_member.phone:
+                logger.error(f"❌ {member_name} has no linked Feishu account (no user_id, open_id, email, or phone)")
                 return f"❌ {member_name} has no linked Feishu account (no user_id, open_id, email, or phone)"
 
-            # Get the agent's Feishu bot credentials
-            config_result = await db.execute(
-                select(ChannelConfig).where(ChannelConfig.agent_id == agent_id, ChannelConfig.channel_type == "feishu")
-            )
-            config = config_result.scalar_one_or_none()
-            if not config:
-                return "❌ This agent has no Feishu channel configured"
-
-            import json as _json
-            from app.models.system_settings import SystemSetting
-
-            content = _json.dumps({"text": message_text}, ensure_ascii=False)
+            content = json.dumps({"text": message_text}, ensure_ascii=False)
 
             async def _try_send(app_id: str, app_secret: str, receive_id: str, id_type: str = "open_id") -> dict:
                 return await feishu_service.send_message(
@@ -2846,16 +2864,16 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
                     agent_obj = agent_r.scalar_one_or_none()
                     creator_id = agent_obj.creator_id if agent_obj else agent_id
 
-                    # Look up the platform user: prefer feishu_user_id, then feishu_open_id
-                    from app.models.user import User as UserModel
-                    feishu_user = None
-                    if open_id:  # open_id param is contextual, try as user_id first isn't reliable here
-                        # Try user lookup by open_id since that's what we have from session context
-                        u_r = await db.execute(
-                            select(UserModel).where(UserModel.feishu_open_id == open_id)
+                    # Look up the platform user via OrgMember if possible
+                    from app.models.org import OrgMember as OrgMemberModel
+                    user_id = target_member.user_id or creator_id
+                    if open_id and not target_member.user_id:
+                        om_r = await db.execute(
+                            select(OrgMemberModel).where(OrgMemberModel.open_id == open_id)
                         )
-                        feishu_user = u_r.scalar_one_or_none()
-                    user_id = feishu_user.id if feishu_user else creator_id
+                        om = om_r.scalar_one_or_none()
+                        if om and om.user_id:
+                            user_id = om.user_id
 
                     ext_conv_id = f"feishu_p2p_{open_id}"
                     sess = await find_or_create_channel_session(
@@ -2864,7 +2882,7 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
                         user_id=user_id,
                         external_conv_id=ext_conv_id,
                         source_channel="feishu",
-                        first_message_title=f"[Agent → {member_name}]",
+                        first_message_title=f"[Agent → {member_name or open_id}]",
                     )
                     db.add(ChatMessage(
                         agent_id=agent_id,
@@ -2875,72 +2893,258 @@ async def _send_feishu_message(agent_id: uuid.UUID, args: dict) -> str:
                     ))
                     sess.last_message_at = _dt.now(_tz.utc)
                     await db.commit()
-                    logger.info(f"[Feishu] Saved outgoing message to session {sess.id} ({member_name})")
+                    logger.info(f"[Feishu] Saved outgoing message to session {sess.id} (ID: {open_id})")
                 except Exception as e:
                     logger.error(f"[Feishu] Failed to save outgoing message to history: {e}")
 
             # Step 1: Try using feishu_user_id (tenant-stable, works across apps)
-            if target_member.feishu_user_id:
-                resp = await _try_send(config.app_id, config.app_secret, target_member.feishu_user_id, "user_id")
+            if target_member.external_id:
+                resp = await _try_send(config.app_id, config.app_secret, target_member.external_id, "user_id")
                 if resp.get("code") == 0:
-                    await _save_outgoing_to_feishu_session(target_member.feishu_open_id or target_member.feishu_user_id)
+                    await _save_outgoing_to_feishu_session(target_member.external_id or target_member.open_id)
                     return f"✅ Successfully sent message to {member_name}"
-
-            # Step 2: Try resolve open_id via email/phone
-            if target_member.email or target_member.phone:
-                try:
-                    resolved = await feishu_service.resolve_open_id(
-                        config.app_id, config.app_secret,
-                        email=target_member.email,
-                        mobile=target_member.phone,
-                    )
-                    if resolved:
-                        resp = await _try_send(config.app_id, config.app_secret, resolved)
-                        if resp.get("code") == 0:
-                            target_member.feishu_open_id = resolved
-                            await db.commit()
-                            await _save_outgoing_to_feishu_session(resolved)
-                            return f"✅ Successfully sent message to {member_name}"
-                except Exception:
-                    pass
-
-            # Step 3: Use stored open_id with agent's app
-            if target_member.feishu_open_id:
-                resp = await _try_send(config.app_id, config.app_secret, target_member.feishu_open_id)
-                if resp.get("code") == 0:
-                    await _save_outgoing_to_feishu_session(target_member.feishu_open_id)
-                    return f"✅ Successfully sent message to {member_name}"
-
-                # Step 4: If cross-app error, try org sync app as fallback
-                err_msg = resp.get("msg", "")
-                if "cross" in err_msg.lower():
-                    org_r = await db.execute(select(SystemSetting).where(SystemSetting.key == "feishu_org_sync"))
-                    org_setting = org_r.scalar_one_or_none()
-                    if org_setting and org_setting.value.get("app_id"):
-                        # Try user_id with org sync app first
-                        if target_member.feishu_user_id:
-                            resp2 = await _try_send(
-                                org_setting.value["app_id"], org_setting.value["app_secret"],
-                                target_member.feishu_user_id, "user_id",
-                            )
-                            if resp2.get("code") == 0:
-                                await _save_outgoing_to_feishu_session(target_member.feishu_open_id)
-                                return f"✅ Successfully sent message to {member_name}"
-                        # Fallback to open_id with org sync app
-                        resp2 = await _try_send(
-                            org_setting.value["app_id"], org_setting.value["app_secret"],
-                            target_member.feishu_open_id,
-                        )
-                        if resp2.get("code") == 0:
-                            await _save_outgoing_to_feishu_session(target_member.feishu_open_id)
-                            return f"✅ Successfully sent message to {member_name}"
-                        return f"❌ Send failed: {resp2.get('msg', str(resp2))}"
-
-                return f"❌ Send failed: {err_msg}"
-
-            return f"❌ {member_name} has no Feishu user_id or open_id and cannot be resolved via email/phone"
+                logger.info(f"❌ Failed to send message to {target_member.external_id} via Feishu: {resp}")
+                return f"发送失败 {resp}"
     except Exception as e:
         return f"❌ Message send error: {str(e)[:200]}"
+
+
+async def _send_channel_message(agent_id: uuid.UUID, args: dict) -> str:
+    """Send message via the recipient's configured channel (Feishu/DingTalk/WeCom).
+
+    1. Find target user from relationships (AgentRelationship -> OrgMember)
+    2. Determine user's provider type (via OrgMember.provider_id -> IdentityProvider)
+    3. Find corresponding channel config (ChannelConfig)
+    4. Send via the appropriate channel
+    """
+    from sqlalchemy import select
+    from sqlalchemy.orm import selectinload
+    from app.models.org import AgentRelationship, OrgMember
+    from app.models.identity import IdentityProvider
+
+    member_name = (args.get("member_name") or "").strip()
+    message_text = (args.get("message") or "").strip()
+    target_channel = (args.get("channel") or "").strip().lower()
+
+    if not member_name:
+        return "❌ Please provide member_name"
+    if not message_text:
+        return "❌ Please provide message content"
+
+    try:
+        async with async_session() as db:
+            # 1. Find target member from relationships with provider info (only active members)
+            result = await db.execute(
+                select(AgentRelationship, OrgMember, IdentityProvider)
+                .join(OrgMember, AgentRelationship.member_id == OrgMember.id)
+                .outerjoin(IdentityProvider, OrgMember.provider_id == IdentityProvider.id)
+                .where(AgentRelationship.agent_id == agent_id, OrgMember.name == member_name, OrgMember.status == "active")
+                .options(selectinload(AgentRelationship.member))
+            )
+            rows = result.all()
+
+            if not rows:
+                return f"❌ {member_name} is not in your relationship network"
+
+            target_member = None
+            provider_type = None
+
+            # Handle multiple matches across different providers
+            if target_channel:
+                for rel, member, provider in rows:
+                    if provider and provider.provider_type == target_channel:
+                        target_member = member
+                        provider_type = target_channel
+                        break
+                if not target_member:
+                    available = [p.provider_type for _, _, p in rows if p]
+                    return f"❌ {member_name} not found in {target_channel} channel. Available channels: {', '.join(available)}"
+            else:
+                if len(rows) > 1:
+                    available = [p.provider_type for _, _, p in rows if p]
+                    logger.warning(f"[ChannelMessage] Ambiguous member '{member_name}' found in multiple channels: {available}")
+                    # Pick the first one as before, but mention others if possible
+                
+                rel, member, provider = rows[0]
+                target_member = member
+                provider_type = provider.provider_type if provider else None
+
+            # 2. Determine channel based on provider type
+            if not provider_type:
+                # Fallback: check which channel configs exist and has user info
+                if target_member.external_id or target_member.open_id:
+                    # Try Feishu as default
+                    provider_type = "feishu"
+                else:
+                    return f"❌ {member_name} has no linked channel (no provider info)"
+
+            logger.info(f"[ChannelMessage] Sending to {member_name} via {provider_type}")
+
+            # 3. Route to appropriate channel
+            if provider_type == "feishu":
+                return await _send_feishu_message(agent_id, {"member_name": member_name, "message": message_text})
+            elif provider_type == "dingtalk":
+                return await _send_dingtalk_message(agent_id, member_name, message_text, target_member)
+            elif provider_type == "wecom":
+                return await _send_wecom_message(agent_id, member_name, message_text, target_member)
+            else:
+                return f"❌ Unsupported channel type: {provider_type}"
+
+    except Exception as e:
+        logger.exception("[ChannelMessage] Error")
+        return f"❌ Channel message error: {str(e)[:200]}"
+
+
+async def _send_dingtalk_message(
+    agent_id: uuid.UUID,
+    member_name: str,
+    message_text: str,
+    target_member: "OrgMember",
+) -> str:
+    """Send message via DingTalk channel using Open API."""
+    import json as _j
+
+    from app.models.channel_config import ChannelConfig
+    from app.services.dingtalk_service import send_dingtalk_message
+
+    try:
+        async with async_session() as db:
+            # 1. Get DingTalk channel config
+            config_result = await db.execute(
+                select(ChannelConfig).where(
+                    ChannelConfig.agent_id == agent_id,
+                    ChannelConfig.channel_type == "dingtalk",
+                    ChannelConfig.is_configured == True,
+                )
+            )
+            config = config_result.scalar_one_or_none()
+            if not config:
+                return "❌ This agent has no DingTalk channel configured"
+
+            # 2. Get recipient's user_id (external_id)
+            user_id = target_member.external_id
+            if not user_id:
+                # Try to use unionid or openid as fallback
+                user_id = target_member.unionid or target_member.open_id
+                if not user_id:
+                    return f"❌ {member_name} has no DingTalk user_id"
+
+            logger.info(f"[DingTalk] Sending to user_id: {user_id}")
+
+            # Get agent_id from extra_config (required for DingTalk API)
+            agent_id_dingtalk = config.extra_config.get("agent_id") if config.extra_config else None
+
+            # 3. Send message via DingTalk service
+            result = await send_dingtalk_message(
+                app_id=config.app_id,
+                app_secret=config.app_secret,
+                user_id=user_id,
+                message=message_text,
+                agent_id=agent_id_dingtalk,
+            )
+
+            if result.get("errcode") == 0:
+                # Save proactive message to session so it appears in UI
+                try:
+                    from app.services.channel_session import find_or_create_channel_session
+                    from app.models.audit import ChatMessage
+                    from datetime import datetime, timezone
+                    
+                    # 1. Find the platform user for this DingTalk ID
+                    from app.models.user import User as UserModel
+                    dt_username = f"dingtalk_{user_id}"
+                    u_r = await db.execute(select(UserModel).where(UserModel.username == dt_username))
+                    platform_user = u_r.scalar_one_or_none()
+                    
+                    if platform_user:
+                        conv_id = f"dingtalk_p2p_{user_id}"
+                        # 2. Get/Create session
+                        sess = await find_or_create_channel_session(
+                            db=db,
+                            agent_id=agent_id,
+                            user_id=platform_user.id,
+                            external_conv_id=conv_id,
+                            source_channel="dingtalk",
+                            first_message_title=message_text[:30],
+                        )
+                        # 3. Save assistant message
+                        db.add(ChatMessage(
+                            agent_id=agent_id,
+                            user_id=platform_user.id,
+                            role="assistant",
+                            content=message_text,
+                            conversation_id=str(sess.id),
+                        ))
+                        sess.last_message_at = datetime.now(timezone.utc)
+                        await db.commit()
+                        logger.info(f"[DingTalk] Proactive message saved to session {sess.id}")
+                except Exception as ex:
+                    logger.error(f"[DingTalk] Failed to save proactive message to session: {ex}")
+
+                return f"✅ Message sent to {member_name} via DingTalk"
+            else:
+                errmsg = result.get("errmsg", "Unknown error")
+                logger.error(f"[DingTalk] Send failed: {result}")
+                return f"❌ DingTalk send failed: {errmsg}"
+
+    except Exception as e:
+        logger.exception("[DingTalk] Error")
+        return f"❌ DingTalk message error: {str(e)[:200]}"
+
+
+async def _send_wecom_message(
+    agent_id: uuid.UUID,
+    member_name: str,
+    message_text: str,
+    target_member: "OrgMember",
+) -> str:
+    """Send message via WeCom channel using Open API."""
+    import json as _j
+
+    from app.models.channel_config import ChannelConfig
+    from app.services.wecom_service import send_wecom_message
+
+    try:
+        async with async_session() as db:
+            # 1. Get WeCom channel config
+            config_result = await db.execute(
+                select(ChannelConfig).where(
+                    ChannelConfig.agent_id == agent_id,
+                    ChannelConfig.channel_type == "wecom",
+                    ChannelConfig.is_configured == True,
+                )
+            )
+            config = config_result.scalar_one_or_none()
+            if not config:
+                return "❌ This agent has no WeCom channel configured"
+
+            # 2. Get recipient's user_id
+            user_id = target_member.external_id
+            if not user_id:
+                user_id = target_member.open_id
+                if not user_id:
+                    return f"❌ {member_name} has no WeCom user_id"
+
+            logger.info(f"[WeCom] Sending to user_id: {user_id}")
+
+            # 3. Send message via WeCom service
+            result = await send_wecom_message(
+                config.app_id,
+                config.app_secret,
+                user_id,
+                message_text,
+            )
+
+            if result.get("errcode") == 0:
+                return f"✅ Message sent to {member_name} via WeCom"
+            else:
+                errmsg = result.get("errmsg", "Unknown error")
+                logger.error(f"[WeCom] Send failed: {result}")
+                return f"❌ WeCom send failed: {errmsg}"
+
+    except Exception as e:
+        logger.exception("[WeCom] Error")
+        return f"❌ WeCom message error: {str(e)[:200]}"
 
 
 async def _send_web_message(agent_id: uuid.UUID, args: dict) -> str:
@@ -5649,10 +5853,10 @@ async def _feishu_user_search(agent_id: uuid.UUID, arguments: dict) -> str:
             lines = [f"🔍 从通讯录找到 {len(_org_members)} 位匹配「{name}」的用户：\n"]
             for _om in _org_members:
                 lines.append(f"• **{_om.name}**")
-                if _om.feishu_user_id:
-                    lines.append(f"  user_id: `{_om.feishu_user_id}`")
-                if _om.feishu_open_id:
-                    lines.append(f"  open_id: `{_om.feishu_open_id}`")
+                if _om.external_id:
+                    lines.append(f"  user_id: `{_om.external_id}`")
+                if _om.open_id:
+                    lines.append(f"  open_id: `{_om.open_id}`")
                 if _om.email:
                     lines.append(f"  邮箱: {_om.email}")
                 if _om.department_path:
@@ -5673,13 +5877,9 @@ async def _feishu_user_search(agent_id: uuid.UUID, arguments: dict) -> str:
             _platform_users = _r.scalars().all()
         for _pu in _platform_users:
             _uid = getattr(_pu, "feishu_user_id", None)
-            _oid = getattr(_pu, "feishu_open_id", None)
-            if _uid or _oid:
+            if _uid:
                 result_lines = [f"🔍 找到匹配「{name}」的用户：\n", f"• **{_pu.display_name}**"]
-                if _uid:
-                    result_lines.append(f"  user_id: `{_uid}`")
-                if _oid:
-                    result_lines.append(f"  open_id: `{_oid}`")
+                result_lines.append(f"  user_id: `{_uid}`")
                 _email = getattr(_pu, "email", None)
                 if _email:
                     result_lines.append(f"  邮箱: {_email}")
@@ -6458,7 +6658,7 @@ async def _install_skill(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
         return f"✅ Skill '{folder_name}' installed successfully ({len(written)} files written to skills/{folder_name}/).\n\nFiles: {', '.join(written)}"
 
     except Exception as e:
-        return f"Install failed: {str(e)[:300]}"
+        return f"❌ Install failed: {str(e)[:300]}"
 
 
 # ─── AgentBay: Browser Extract & Observe ────────────────────────────────

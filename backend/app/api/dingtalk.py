@@ -29,7 +29,7 @@ async def configure_dingtalk_channel(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Configure DingTalk bot for an agent. Fields: app_key, app_secret."""
+    """Configure DingTalk bot for an agent. Fields: app_key, app_secret, agent_id (optional)."""
     agent, _ = await check_agent_access(db, current_user, agent_id)
     if not is_agent_creator(current_user, agent):
         raise HTTPException(status_code=403, detail="Only creator can configure channel")
@@ -38,6 +38,11 @@ async def configure_dingtalk_channel(
     app_secret = data.get("app_secret", "").strip()
     if not app_key or not app_secret:
         raise HTTPException(status_code=422, detail="app_key and app_secret are required")
+
+    # Handle connection mode (Stream/WebSocket vs Webhook) and agent_id
+    extra_config = data.get("extra_config", {})
+    conn_mode = extra_config.get("connection_mode", "websocket")
+    dingtalk_agent_id = extra_config.get("agent_id", "")  # DingTalk AgentId for API messaging
 
     result = await db.execute(
         select(ChannelConfig).where(
@@ -50,11 +55,20 @@ async def configure_dingtalk_channel(
         existing.app_id = app_key
         existing.app_secret = app_secret
         existing.is_configured = True
+        existing.extra_config = {**existing.extra_config, "connection_mode": conn_mode, "agent_id": dingtalk_agent_id}
         await db.flush()
-        # Restart Stream client
-        from app.services.dingtalk_stream import dingtalk_stream_manager
-        import asyncio
-        asyncio.create_task(dingtalk_stream_manager.start_client(agent_id, app_key, app_secret))
+        
+        # Restart Stream client if in websocket mode
+        if conn_mode == "websocket":
+            from app.services.dingtalk_stream import dingtalk_stream_manager
+            import asyncio
+            asyncio.create_task(dingtalk_stream_manager.start_client(agent_id, app_key, app_secret))
+        else:
+            # Stop existing Stream client if switched to webhook
+            from app.services.dingtalk_stream import dingtalk_stream_manager
+            import asyncio
+            asyncio.create_task(dingtalk_stream_manager.stop_client(agent_id))
+            
         return ChannelConfigOut.model_validate(existing)
 
     config = ChannelConfig(
@@ -63,14 +77,16 @@ async def configure_dingtalk_channel(
         app_id=app_key,
         app_secret=app_secret,
         is_configured=True,
+        extra_config={"connection_mode": conn_mode},
     )
     db.add(config)
     await db.flush()
 
-    # Start Stream client
-    from app.services.dingtalk_stream import dingtalk_stream_manager
-    import asyncio
-    asyncio.create_task(dingtalk_stream_manager.start_client(agent_id, app_key, app_secret))
+    # Start Stream client if in websocket mode
+    if conn_mode == "websocket":
+        from app.services.dingtalk_stream import dingtalk_stream_manager
+        import asyncio
+        asyncio.create_task(dingtalk_stream_manager.start_client(agent_id, app_key, app_secret))
 
     return ChannelConfigOut.model_validate(config)
 
@@ -253,3 +269,88 @@ async def process_dingtalk_message(
             f"Replied to DingTalk message: {reply_text[:80]}",
             detail={"channel": "dingtalk", "user_text": user_text[:200], "reply": reply_text[:500]},
         )
+
+
+# ─── OAuth Callback (SSO) ──────────────────────────────
+
+@router.get("/auth/dingtalk/callback")
+async def dingtalk_callback(
+    authCode: str, # DingTalk uses authCode parameter
+    state: str = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Callback for DingTalk OAuth2 login."""
+    from app.models.identity import SSOScanSession
+    from app.core.security import create_access_token
+    from fastapi.responses import HTMLResponse
+    from app.services.auth_registry import auth_provider_registry
+
+    # 1. Resolve session to get tenant context
+    tenant_id = None
+    if state:
+        try:
+            sid = uuid.UUID(state)
+            s_res = await db.execute(select(SSOScanSession).where(SSOScanSession.id == sid))
+            session = s_res.scalar_one_or_none()
+            if session:
+                tenant_id = session.tenant_id
+        except (ValueError, AttributeError):
+            pass
+
+    # 2. Get DingTalk provider config
+    auth_provider = await auth_provider_registry.get_provider(db, "dingtalk", str(tenant_id) if tenant_id else None)
+    if not auth_provider:
+        return HTMLResponse("Auth failed: DingTalk provider not configured for this tenant")
+
+    # 3. Exchange code for token and get user info
+    try:
+        # Step 1: Exchange authCode for userAccessToken
+        token_data = await auth_provider.exchange_code_for_token(authCode)
+        access_token = token_data.get("access_token")
+        if not access_token:
+            logger.error(f"DingTalk token exchange failed: {token_data}")
+            return HTMLResponse(f"Auth failed: Token exchange error")
+
+        # Step 2: Get user info using modern v1.0 API
+        user_info = await auth_provider.get_user_info(access_token)
+        if not user_info.provider_union_id:
+            logger.error(f"DingTalk user info missing unionId: {user_info.raw_data}")
+            return HTMLResponse("Auth failed: No unionid returned")
+
+        # Step 3: Find or create user (handles OrgMember linking)
+        user, is_new = await auth_provider.find_or_create_user(
+            db, user_info, tenant_id=str(tenant_id) if tenant_id else None
+        )
+        if not user:
+            return HTMLResponse("Auth failed: User resolution failed")
+
+    except Exception as e:
+        logger.error(f"DingTalk login error: {e}")
+        return HTMLResponse(f"Auth failed: {str(e)}")
+
+    # 4. Standard login
+    token = create_access_token(str(user.id), user.role)
+
+    if state:
+        try:
+            sid = uuid.UUID(state)
+            s_res = await db.execute(select(SSOScanSession).where(SSOScanSession.id == sid))
+            session = s_res.scalar_one_or_none()
+            if session:
+                session.status = "authorized"
+                session.provider_type = "dingtalk"
+                session.user_id = user.id
+                session.access_token = token
+                session.error_msg = None
+                await db.commit()
+                return HTMLResponse(
+                    f"""<html><head><meta charset="utf-8" /></head>
+                    <body style="font-family: sans-serif; padding: 24px;">
+                        <div>SSO login successful. Redirecting...</div>
+                        <script>window.location.href = "/sso/entry?sid={sid}&complete=1";</script>
+                    </body></html>"""
+                )
+        except Exception as e:
+            logger.exception("Failed to update SSO session (dingtalk) %s", e)
+
+    return HTMLResponse(f"Logged in. Token: {token}")
