@@ -1260,6 +1260,166 @@ BUILTIN_TOOLS = [
         "config": {},
         "config_schema": {},
     },
+    # --- Browser Automation Tools ---
+    {
+        "name": "web_fetch",
+        "display_name": "Web Fetch",
+        "description": "Perform a simple HTTP request to fetch webpage content without using a full browser. Faster and lighter than agent_browser when only HTML or raw data is needed. Supports custom User-Agent and basic methods.",
+        "category": "browser",
+        "icon": "🌐",
+        "is_default": True,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "The URL to fetch"},
+                "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE"], "description": "HTTP method (default: GET)", "default": "GET"},
+                "headers": {"type": "object", "description": "Custom HTTP headers"},
+                "user_agent": {"type": "string", "description": "Custom User-Agent string"},
+                "params": {"type": "object", "description": "Query parameters"},
+                "data": {"type": "string", "description": "Request body for POST/PUT"},
+                "timeout": {"type": "integer", "description": "Request timeout in seconds (default: 30)", "default": 30},
+                "return_markdown": {"type": "boolean", "description": "Automatically convert HTML response to Markdown (removes ads/nav)", "default": False},
+            },
+            "required": ["url"],
+        },
+        "config": {
+            "default_user_agent": "Clawith/1.0 (WebFetch)",
+            "whitelist": [],
+            "blacklist": [],
+        },
+        "config_schema": {
+            "fields": [
+                {
+                    "key": "default_user_agent",
+                    "label": "Default User-Agent",
+                    "type": "text",
+                    "default": "Clawith/1.0 (WebFetch)",
+                },
+                {
+                    "key": "whitelist",
+                    "label": "URL Whitelist (Regex)",
+                    "type": "list",
+                    "default": [],
+                    "placeholder": "e.g. ^https://.*\\.google\\.com",
+                    "description": "Only allow URLs matching these patterns. If empty, all URLs are allowed unless blacklisted."
+                },
+                {
+                    "key": "blacklist",
+                    "label": "URL Blacklist (Regex)",
+                    "type": "list",
+                    "default": [],
+                    "placeholder": "e.g. ^https://.*\\.forbidden\\.com",
+                    "description": "Block URLs matching these patterns. Blacklist takes precedence over whitelist."
+                },
+            ]
+        },
+    },
+    {
+        "name": "agent_browser",
+        "display_name": "Agent Browser",
+        "description": "Headless browser automation CLI for AI agents. Navigate pages, interact with elements using accessibility tree refs, take snapshots, and automate multi-step web workflows. Use 'agent-browser open' to navigate, 'agent-browser snapshot -i --json' to get interactive elements, then use refs like '@e1' to click/fill elements.",
+        "category": "browser",
+        "icon": "🌐",
+        "is_default": True,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["open", "snapshot", "click", "fill", "type", "hover", "check", "uncheck", "select", "press", "scroll", "drag", "get", "is", "wait", "screenshot", "pdf", "back", "forward", "reload", "close", "tab", "frame"],
+                    "description": "Browser action to perform"
+                },
+                "url": {"type": "string", "description": "URL to open (for 'open' action)"},
+                "element_ref": {"type": "string", "description": "Element reference like @e1 (for click, fill, hover, etc.)"},
+                "text": {"type": "string", "description": "Text to fill or type"},
+                "value": {"type": "string", "description": "Value for select or attribute"},
+                "key": {"type": "string", "description": "Attribute name (for get attr) or key name (for storage)"},
+                "selector": {"type": "string", "description": "CSS selector (for scoped snapshot)"},
+                "property": {"type": "string", "enum": ["text", "html", "markdown", "value", "attr", "title", "url", "count"], "description": "Property to get"},
+                "state": {"type": "string", "enum": ["visible", "enabled", "checked"], "description": "Element state to check"},
+                "wait_for": {"type": "string", "description": "Text, URL pattern, or selector to wait for"},
+                "direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"},
+                "pixels": {"type": "integer", "description": "Pixels to scroll (default 300)"},
+                "target_ref": {"type": "string", "description": "Target element for drag operation"},
+                "tab_index": {"type": "integer", "description": "Tab index for tab action"},
+                "file_path": {"type": "string", "description": "文件名（例如 'screenshot.png'）。文件将按规律自动保存到：workspace/uploads/browser/{date}/{filename}"},
+                "full_page": {"type": "boolean", "description": "Capture full page (for screenshot)"},
+                "network": {"type": "string", "description": "Network idle mode: 'load', 'domcontentloaded', 'networkidle'"},
+                "compact": {"type": "boolean", "description": "Use compact output format"},
+                "depth": {"type": "integer", "description": "Max snapshot depth"},
+                "interactive": {"type": "boolean", "description": "Only show interactive elements", "default": True},
+                "json_output": {"type": "boolean", "description": "Output as JSON", "default": True},
+                "session": {"type": "string", "description": "Browser session name for isolation"},
+                "timeout": {"type": "integer", "description": "Max execution time in seconds (default 60, max from config)"},
+            },
+            "required": ["action"],
+        },
+        "config": {
+            "default_timeout": 60,
+            "max_timeout": 120,
+        },
+        "config_schema": {
+            "fields": [
+                {
+                    "key": "default_timeout",
+                    "label": "Default Timeout (seconds)",
+                    "type": "number",
+                    "default": 60,
+                    "min": 10,
+                    "max": 600,
+                },
+                {
+                    "key": "max_timeout",
+                    "label": "Max Timeout (seconds)",
+                    "type": "number",
+                    "default": 120,
+                    "min": 30,
+                    "max": 600,
+                },
+                {
+                    "key": "headed",
+                    "label": "Show Browser Window",
+                    "type": "select",
+                    "options": [
+                        {"value": "false", "label": "Headless (faster, no window)"},
+                        {"value": "true", "label": "Headed (see browser for debugging)"},
+                    ],
+                    "default": "false",
+                },
+                {
+                    "key": "whitelist",
+                    "label": "URL Whitelist (Regex)",
+                    "type": "list",
+                    "default": [],
+                    "placeholder": "e.g. ^https://.*\\.google\\.com",
+                    "description": "Only allow URLs matching these patterns. If empty, all URLs are allowed unless blacklisted."
+                },
+                {
+                    "key": "blacklist",
+                    "label": "URL Blacklist (Regex)",
+                    "type": "list",
+                    "default": [],
+                    "placeholder": "e.g. ^https://.*\\.forbidden\\.com",
+                    "description": "Block URLs matching these patterns. Blacklist takes precedence over whitelist."
+                },
+            ]
+        },
+    },
+    {
+        "name": "html_to_markdown",
+        "display_name": "HTML to Markdown",
+        "description": "Convert HTML content to clean, readable Markdown. Uses trafilatura for high-quality main-content extraction (removing ads, navigation, and boilerplate).",
+        "category": "browser",
+        "icon": "📝",
+        "is_default": True,
+        "parameters_schema": {
+            "type": "object",
+            "properties": {
+                "html": {"type": "string", "description": "Full HTML content or snippet to convert"},
+                "include_links": {"type": "boolean", "description": "Whether to include hyperlinks in the markdown output", "default": True},
+                "include_images": {"type": "boolean", "description": "Whether to include images (as markdown links) in the markdown output", "default": False},
+            },
+            "required": ["html"],
     {
         "name": "feishu_approval_create",
         "display_name": "Feishu Approval Create",

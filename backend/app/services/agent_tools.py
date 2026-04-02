@@ -14,10 +14,12 @@ The agent reads/writes these files directly. No per-concept tools needed.
 
 import json
 import os
+import re
 import uuid
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Optional, Any
 import re
 
@@ -1311,6 +1313,82 @@ AGENT_TOOLS = [
             },
         },
     },
+    # ─── Browser Automation Tools ───────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "agent_browser",
+            "description": "Headless browser automation CLI for AI agents. Navigate pages, interact with elements using accessibility tree refs, take snapshots, and automate multi-step web workflows. Use 'agent-browser open' to navigate, 'agent-browser snapshot -i --json' to get interactive elements, then use refs like '@e1' to click/fill elements. Install: npm install -g agent-browser && agent-browser install",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["open", "snapshot", "click", "fill", "type", "hover", "check", "uncheck", "select", "press", "scroll", "drag", "get", "is", "wait", "screenshot", "pdf", "back", "forward", "reload", "close", "tab", "frame"],
+                        "description": "Browser action to perform: open (navigate), snapshot (get element tree), click/fill/type (interact), get (read values), is (check state), wait (pause), screenshot/pdf (capture), back/forward/reload (navigate), close (end session), tab (manage tabs), frame (switch iframe)"
+                    },
+                    "url": {"type": "string", "description": "URL to open (for 'open' action)"},
+                    "element_ref": {"type": "string", "description": "Element reference like @e1 or @e2 (get from snapshot output)"},
+                    "text": {"type": "string", "description": "Text to fill or type into input fields"},
+                    "value": {"type": "string", "description": "Value for select dropdown or attribute name"},
+                    "key": {"type": "string", "description": "Attribute name (for 'get attr') or key name (for storage) or keyboard key (for 'press')"},
+                    "selector": {"type": "string", "description": "CSS selector for scoped snapshot or count"},
+                    "property": {"type": "string", "enum": ["text", "html", "markdown", "value", "attr", "title", "url", "count"], "description": "Property to get: text (element text), html (element HTML), markdown (convert element to markdown), value (input value), attr (attribute), title (page title), url (current URL), count (element count)"},
+                    "state": {"type": "string", "enum": ["visible", "enabled", "checked"], "description": "Element state to check: visible, enabled, or checked"},
+                    "wait_for": {"type": "string", "description": "Text or selector to wait for"},
+                    "direction": {"type": "string", "enum": ["up", "down", "left", "right"], "description": "Scroll direction"},
+                    "pixels": {"type": "integer", "description": "Pixels to scroll (default 300)"},
+                    "target_ref": {"type": "string", "description": "Target element ref for drag operation"},
+                    "tab_index": {"type": "integer", "description": "Tab index (0-based) to switch to"},
+                    "file_path": {"type": "string", "description": "文件名（例如 'screenshot.png'）。文件将按规律自动保存到：workspace/uploads/browser/{date}/{filename}"},
+                    "full_page": {"type": "boolean", "description": "Capture full page for screenshot"},
+                    "network": {"type": "string", "description": "Network idle mode: 'load', 'domcontentloaded', 'networkidle'"},
+                    "compact": {"type": "boolean", "description": "Use compact output format for snapshot"},
+                    "depth": {"type": "integer", "description": "Max snapshot depth"},
+                    "session": {"type": "string", "description": "Browser session name for isolation (allows multiple concurrent sessions)"},
+                    "timeout": {"type": "integer", "description": "Max execution time in seconds (default from config)"},
+                },
+                "required": ["action"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "web_fetch",
+            "description": "Perform a simple HTTP request to fetch webpage content without using a full browser. Faster and lighter than agent_browser when only HTML or raw data is needed. Supports custom User-Agent and basic methods.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "The URL to fetch"},
+                    "method": {"type": "string", "enum": ["GET", "POST", "PUT", "DELETE"], "description": "HTTP method (default: GET)", "default": "GET"},
+                    "headers": {"type": "object", "description": "Custom HTTP headers"},
+                    "user_agent": {"type": "string", "description": "Custom User-Agent string"},
+                    "params": {"type": "object", "description": "Query parameters"},
+                    "data": {"type": "string", "description": "Request body for POST/PUT"},
+                    "timeout": {"type": "integer", "description": "Request timeout in seconds (default: 30)", "default": 30},
+                    "return_markdown": {"type": "boolean", "description": "If true and response is HTML, convert it to clean Markdown. Useful for LLM processing.", "default": False},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "html_to_markdown",
+            "description": "Convert HTML content to clean, well-structured Markdown. Ideal for cleaning up raw HTML for AI processing. Can handle full documents or fragments.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "html": {"type": "string", "description": "The raw HTML content to convert"},
+                    "include_links": {"type": "boolean", "description": "Whether to preserve links in the output (default: true)", "default": True},
+                    "include_images": {"type": "boolean", "description": "Whether to preserve images in the output (default: false)", "default": False},
+                },
+                "required": ["html"],
+            },
+        },
+    },
     # --- Pages: public HTML hosting ---
     {
         "type": "function",
@@ -1957,6 +2035,13 @@ async def execute_tool(
         # ── Email Tools ──
         elif tool_name in ("send_email", "read_emails", "reply_email"):
             result = await _handle_email_tool(tool_name, agent_id, ws, arguments)
+        # ── Browser Automation Tools ──
+        elif tool_name == "agent_browser":
+            result = await _agent_browser(agent_id, ws, arguments)
+        elif tool_name == "web_fetch":
+            result = await _web_fetch(agent_id, arguments)
+        elif tool_name == "html_to_markdown":
+            result = await _html_to_markdown(arguments)
         # ── Pages: public HTML hosting ──
         elif tool_name == "publish_page":
             result = await _publish_page(agent_id, user_id, ws, arguments)
@@ -4507,7 +4592,7 @@ _DANGEROUS_BASH = [
 ]
 
 _DANGEROUS_PYTHON_IMPORTS = [
-    "subprocess", "shutil.rmtree", "os.system", "os.popen",
+    "shutil.rmtree", "os.system", "os.popen", #"subprocess"
     "os.exec", "os.spawn",
     "socket", "http.client", "urllib.request", "requests",
     "ftplib", "smtplib", "telnetlib", "ctypes",
@@ -4674,6 +4759,9 @@ async def _execute_code_legacy(ws: Path, arguments: dict) -> str:
         safe_env = dict(os.environ)
         safe_env["HOME"] = str(work_dir)
         safe_env["PYTHONDONTWRITEBYTECODE"] = "1"
+
+        # Add root to PYTHONPATH so imports from workspace/ or skills/ work
+        safe_env["PYTHONPATH"] = str(work_dir)
 
         proc = await asyncio.create_subprocess_exec(
             *cmd_prefix, str(script_path),
@@ -8466,3 +8554,449 @@ async def _agentbay_computer_list_visible_apps(agent_id: Optional[uuid.UUID], ws
     except Exception as e:
         logger.exception(f"[AgentBay] Computer list_visible_apps failed")
         return f"List applications failed: {str(e)[:200]}"
+
+
+# ─── 自定义增加函数 ───────────────────────────────────────────────────
+
+def _is_url_allowed(url: str, whitelist: list[str], blacklist: list[str]) -> bool:
+    """Check if a URL is allowed based on whitelist and blacklist.
+    
+    Args:
+        url: The URL to check.
+        whitelist: List of allowed URL patterns (regex).
+        blacklist: List of forbidden URL patterns (regex).
+        
+    Returns:
+        True if the URL is allowed, False otherwise.
+    """
+    if not url:
+        return True
+        
+    # Standardize URL
+    if not url.startswith(("http://", "https://")):
+        # For relative paths or incomplete URLs, we might not be able to check easily
+        # But agent-browser usually takes full URLs
+        pass
+
+    # Blacklist check (takes precedence)
+    for pattern in blacklist:
+        if re.search(pattern, url, re.IGNORECASE):
+            return False
+            
+    # Whitelist check
+    if whitelist:
+        for pattern in whitelist:
+            if re.search(pattern, url, re.IGNORECASE):
+                return True
+        return False # Not in whitelist
+        
+    return True
+
+
+# ─── Browser Automation Tool ─────────────────────────────────
+
+async def _web_fetch(agent_id: uuid.UUID, arguments: dict) -> str:
+    """Perform a simple HTTP request using httpx."""
+    import httpx
+    
+    url = arguments.get("url", "").strip()
+    if not url:
+        return "❌ URL is required"
+        
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    # Load config and settings for filtering
+    config = await _get_tool_config(agent_id, "web_fetch") or {}
+    
+    settings = get_settings()
+    # Priority: 1. tool_config (per-agent or platform) 2. global environment settings
+    whitelist = config.get("whitelist", settings.BROWSER_WHITELIST or [])
+    blacklist = config.get("blacklist", settings.BROWSER_BLACKLIST or [])
+
+    if not _is_url_allowed(url, whitelist, blacklist):
+        return f"❌ Access denied: URL '{url}' is not allowed."
+
+    method = arguments.get("method", "GET").upper()
+    headers = arguments.get("headers") or {}
+    user_agent = arguments.get("user_agent") or config.get("default_user_agent") or "Clawith/1.0 (WebFetch)"
+    params = arguments.get("params")
+    data = arguments.get("data")
+    timeout = min(arguments.get("timeout", 30), 60)
+    return_markdown = arguments.get("return_markdown", False)
+
+    # Set User-Agent if provided
+    if user_agent:
+        headers["User-Agent"] = user_agent
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=timeout) as client:
+            if method == "GET":
+                resp = await client.get(url, headers=headers, params=params)
+            elif method == "POST":
+                resp = await client.post(url, headers=headers, params=params, content=data)
+            elif method == "PUT":
+                resp = await client.put(url, headers=headers, params=params, content=data)
+            elif method == "DELETE":
+                resp = await client.delete(url, headers=headers, params=params)
+            else:
+                return f"❌ Unsupported method: {method}"
+
+        status_code = resp.status_code
+        content_type = resp.headers.get("Content-Type", "").lower()
+        
+        # Format response
+        result_parts = [f"🌐 {method} {url} -> {status_code}"]
+        
+        if status_code >= 400:
+            result_parts.append(f"⚠️ Error: {resp.text[:500]}")
+        else:
+            if "application/json" in content_type:
+                try:
+                    result_parts.append(json.dumps(resp.json(), indent=2, ensure_ascii=False))
+                except Exception:
+                    result_parts.append(resp.text[:5000])
+            elif return_markdown and "text/html" in content_type:
+                try:
+                    import trafilatura
+                    markdown = trafilatura.extract(resp.text, output_format="markdown", target_language="zh")
+                    if not markdown:
+                        markdown = trafilatura.utils.decode_html(resp.text)
+                    result_parts.append(markdown[:15000])
+                except Exception as e:
+                    logger.error(f"[WebFetch] Markdown conversion failed: {e}")
+                    result_parts.append(resp.text[:10000])
+            else:
+                # Basic HTML/text truncation
+                text = resp.text
+                if len(text) > 10000:
+                    text = text[:10000] + "\n\n... (truncated)"
+                result_parts.append(text)
+                
+        return "\n\n".join(result_parts)
+
+    except Exception as e:
+        return f"❌ Fetch error: {str(e)[:300]}"
+
+
+async def _agent_browser(agent_id: uuid.UUID, ws: Path, arguments: dict) -> str:
+    """Execute agent-browser CLI commands for headless browser automation.
+    
+    agent-browser is a headless browser automation CLI that provides browser automation
+    for AI agents.
+    """
+    import subprocess
+    import json as json_mod
+    
+    action = arguments.get("action", "")
+    if not action:
+        return "❌ Please specify an action (open, snapshot, click, fill, etc.)"
+    
+    # Build the agent-browser command
+    cmd = ["agent-browser"]
+    
+    # Session isolation: each agent gets its own browser session
+    session = arguments.get("session") or f"agent_{str(agent_id)[:8]}"
+    cmd.extend(["--session", session])
+    
+    # Load config (priority: AgentTool > Tool)
+    config = await _get_tool_config(agent_id, "agent_browser") or {}
+        
+    settings = get_settings()
+    # Merge global settings with tool-specific config (tool config overrides)
+    whitelist = config.get("whitelist", settings.BROWSER_WHITELIST or [])
+    blacklist =config.get("blacklist", settings.BROWSER_BLACKLIST or [])
+
+    # Timeout settings: config overrides global settings
+    max_timeout = config.get("max_timeout") if config.get("max_timeout") is not None else settings.BROWSER_MAX_TIMEOUT
+    default_timeout = config.get("default_timeout") or 60
+
+    if config.get("headed"):
+        cmd.append("--headed")
+    
+    action_result_hint = ""
+
+    # Build action-specific arguments
+    if action == "open":
+        url = arguments.get("url", "")
+        if not url:
+            return "❌ URL is required for 'open' action"
+            
+        if not _is_url_allowed(url, whitelist, blacklist):
+            return f"❌ Access denied: URL '{url}' is not allowed."
+            
+        cmd.extend(["open", url])
+    elif action == "snapshot":
+        cmd.append("snapshot")
+        if arguments.get("interactive", True):
+            cmd.append("-i")
+        if arguments.get("compact"):
+            cmd.append("-c")
+        depth = arguments.get("depth")
+        if depth:
+            cmd.extend(["-d", str(depth)])
+        selector = arguments.get("selector")
+        if selector:
+            cmd.extend(["-s", selector])
+        if arguments.get("json_output", True):
+            cmd.append("--json")
+    elif action == "click":
+        ref = arguments.get("element_ref", "")
+        if not ref:
+            return "❌ element_ref (e.g., @e1) is required for 'click' action"
+        cmd.extend(["click", ref])
+    elif action == "fill":
+        ref = arguments.get("element_ref", "")
+        text = arguments.get("text", "")
+        if not ref:
+            return "❌ element_ref is required for 'fill' action"
+        cmd.extend(["fill", ref, text])
+    elif action == "type":
+        ref = arguments.get("element_ref", "")
+        text = arguments.get("text", "")
+        if not ref:
+            return "❌ element_ref is required for 'type' action"
+        cmd.extend(["type", ref, text])
+    elif action == "hover":
+        ref = arguments.get("element_ref", "")
+        if not ref:
+            return "❌ element_ref is required for 'hover' action"
+        cmd.extend(["hover", ref])
+    elif action in ("check", "uncheck"):
+        ref = arguments.get("element_ref", "")
+        if not ref:
+            return "❌ element_ref is required"
+        cmd.extend([action, ref])
+    elif action == "select":
+        ref = arguments.get("element_ref", "")
+        value = arguments.get("value", "")
+        if not ref or not value:
+            return "❌ element_ref and value are required for 'select' action"
+        cmd.extend(["select", ref, value])
+    elif action == "press":
+        key = arguments.get("key", "")
+        if not key:
+            return "❌ key is required for 'press' action"
+        cmd.extend(["press", key])
+    elif action == "scroll":
+        direction = arguments.get("direction", "down")
+        pixels = arguments.get("pixels", 300)
+        cmd.extend(["scroll", direction, str(pixels)])
+    elif action == "drag":
+        source_ref = arguments.get("element_ref", "")
+        target_ref = arguments.get("target_ref", "")
+        if not source_ref or not target_ref:
+            return "❌ element_ref and target_ref are required for 'drag' action"
+        cmd.extend(["drag", source_ref, target_ref])
+    elif action == "get":
+        ref = arguments.get("element_ref", "")
+        property_type = arguments.get("property", "")
+        if not property_type:
+            return "❌ property is required for 'get' action (text, html, markdown, value, attr, title, url, count)"
+        if property_type == "count":
+            selector = arguments.get("selector", "")
+            cmd.extend(["get", "count", selector, "--json"])
+        elif property_type == "attr":
+            attr_name = arguments.get("key", "")
+            if not ref or not attr_name:
+                return "❌ element_ref and key (attribute name) are required for 'get attr'"
+            cmd.extend(["get", "attr", ref, attr_name, "--json"])
+        elif property_type == "title":
+            cmd.extend(["get", "title", "--json"])
+        elif property_type == "url":
+            cmd.extend(["get", "url", "--json"])
+        elif property_type == "markdown":
+            if not ref:
+                return "❌ element_ref is required for 'get markdown'"
+            # First get HTML then convert locally
+            cmd.extend(["get", "html", ref, "--json"])
+        else:
+            if not ref:
+                return "❌ element_ref is required for 'get text/html/value'"
+            cmd.extend(["get", property_type, ref, "--json"])
+    elif action == "is":
+        ref = arguments.get("element_ref", "")
+        state = arguments.get("state", "")
+        if not ref or not state:
+            return "❌ element_ref and state are required for 'is' action (visible, enabled, checked)"
+        cmd.extend(["is", state, ref, "--json"])
+    elif action == "wait":
+        wait_for = arguments.get("wait_for", "")
+        network = arguments.get("network", "")
+        key = arguments.get("key", "")
+        if wait_for:
+            cmd.extend(["wait", "--text", wait_for])
+        elif network:
+            cmd.extend(["wait", "--load", network])
+        elif key:
+            cmd.extend(["wait", "--fn", key])
+        else:
+            ref = arguments.get("element_ref", "")
+            if ref:
+                cmd.extend(["wait", ref])
+            else:
+                ms = arguments.get("milliseconds", 1000)
+                cmd.extend(["wait", str(ms)])
+    elif action == "screenshot":
+        input_filename = arguments.get("file_path", f"screenshot_{datetime.now().strftime('%H%M%S')}.png")
+        filename = Path(input_filename).name
+        today = datetime.now().strftime("%Y-%m-%d")
+        rel_dir = Path("workspace") / "uploads" / "browser" / today
+        uploads_dir = ws / rel_dir
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        file_path = (uploads_dir / filename).resolve()
+        
+        cmd.extend(["screenshot"])
+        if arguments.get("full_page"):
+            cmd.append("--full")
+        cmd.append(str(file_path))
+        action_result_hint = f"\n✅ Screenshot saved to: {rel_dir / filename}"
+
+    elif action == "pdf":
+        input_filename = arguments.get("file_path", f"page_{datetime.now().strftime('%H%M%S')}.pdf")
+        filename = Path(input_filename).name
+        today = datetime.now().strftime("%Y-%m-%d")
+        rel_dir = Path("workspace") / "uploads" / "browser" / today
+        uploads_dir = ws / rel_dir
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+        file_path = (uploads_dir / filename).resolve()
+        
+        cmd.extend(["pdf", str(file_path)])
+        action_result_hint = f"\n✅ PDF saved to: {rel_dir / filename}"
+    elif action == "back":
+        cmd.append("back")
+    elif action == "forward":
+        cmd.append("forward")
+    elif action == "reload":
+        cmd.append("reload")
+    elif action == "close":
+        cmd.append("close")
+    elif action == "tab":
+        tab_index = arguments.get("tab_index")
+        url = arguments.get("url", "")
+        if tab_index is not None:
+            cmd.extend(["tab", str(tab_index)])
+        elif url:
+            cmd.extend(["tab", "new", url])
+        else:
+            return "❌ tab_index or url is required for 'tab' action"
+    elif action == "frame":
+        ref = arguments.get("element_ref", "")
+        if ref:
+            cmd.extend(["frame", ref])
+        else:
+            cmd.extend(["frame", "main"])
+    else:
+        return f"❌ Unknown action: {action}. Supported: open, snapshot, click, fill, type, hover, check, uncheck, select, press, scroll, drag, get, is, wait, screenshot, pdf, back, forward, reload, close, tab, frame"
+    
+    try:
+        import asyncio
+        # Timeout: 支持从参数、配置、全局设置获取，优先级: arguments > config > settings
+        timeout = arguments.get("timeout") or default_timeout
+        timeout = min(timeout, max_timeout)  # 不超过最大限制
+        
+        def _sync_run():
+            return subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            
+        result = await asyncio.to_thread(_sync_run)
+
+        if result.returncode != 0:
+            stderr_text = result.stderr.strip()
+            if "not found" in stderr_text.lower() or "command not found" in stderr_text.lower():
+                return (
+                    "❌ agent-browser is not installed.\n\n"
+                    "Please install it first:\n"
+                    "```bash\nnpm install -g agent-browser\nagent-browser install\n```\n"
+                    "Then restart the agent."
+                )
+            return f"❌ agent-browser error: {stderr_text[:500]}"
+
+        output = result.stdout.strip()
+
+        # Try to parse JSON output for structured responses
+        if arguments.get("json_output", False) or action in ("snapshot", "get", "is", "wait"):
+            try:
+                data = json_mod.loads(output)
+                if isinstance(data, dict):
+                    if not data.get("success", True):
+                        return f"❌ {data.get('error', 'Unknown error')}"
+
+                    # Handle markdown property conversion locally
+                    if action == "get" and arguments.get("property") == "markdown":
+                        try:
+                            import trafilatura
+                            html = data.get("data", "")
+                            if not html:
+                                return "❌ No HTML content found to convert to Markdown"
+                            markdown = trafilatura.extract(html, output_format="markdown", target_language="zh")
+                            if not markdown:
+                                markdown = trafilatura.utils.decode_html(html)
+                            return (markdown or "❌ Markdown conversion failed")[:15000]
+                        except Exception as e:
+                            return f"❌ Markdown conversion failed: {str(e)}"
+
+                    return json_mod.dumps(data.get("data", data), indent=2, ensure_ascii=False)
+                return json_mod.dumps(data, indent=2, ensure_ascii=False)
+            except json_mod.JSONDecodeError:
+                pass
+
+        final_output = output if output else "✅ Action completed successfully"
+        if action_result_hint:
+            final_output += action_result_hint
+            
+        return final_output
+
+    except subprocess.TimeoutExpired:
+        return f"❌ agent-browser command timed out ({timeout}s limit)"
+    except FileNotFoundError:
+        return (
+            "❌ agent-browser not found.\n\n"
+            "Install it with:\n"
+            "```bash\nnpm install -g agent-browser\nagent-browser install\n```"
+        )
+    except Exception as e:
+        return f"❌ agent-browser error: {str(e)[:200]}"
+
+async def _html_to_markdown(arguments: dict) -> str:
+    """
+    Convert HTML content to Markdown using trafilatura.
+    """
+    html = arguments.get("html", "")
+    if not html:
+        return "❌ Missing 'html' argument"
+
+    try:
+        import trafilatura
+        # Use trafilatura to extract main content and convert to markdown
+        markdown = trafilatura.extract(
+            html,
+            output_format="markdown",
+            target_language="zh",
+            include_links=arguments.get("include_links", True),
+            include_images=arguments.get("include_images", False),
+            include_comments=False,
+            include_tables=True,
+            no_fallback=False
+        )
+
+        # If extraction fails (e.g. not a full page), try simple conversion
+        if not markdown:
+            # Fallback to a simpler approach if it's just a snippet
+            try:
+                from trafilatura.utils import decode_html
+                markdown = decode_html(html)
+            except:
+                pass
+
+        if not markdown:
+            return "❌ Failed to convert HTML to Markdown"
+
+        return markdown[:15000]
+    except Exception as e:
+        logger.error(f"Error in _html_to_markdown: {str(e)}")
+        return f"❌ Error during conversion: {str(e)}"

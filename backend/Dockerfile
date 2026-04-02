@@ -23,8 +23,15 @@ FROM python:3.12-slim AS production
 
 WORKDIR /app
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends libpq5 curl shadowsocks-libev gosu && \
+    apt-get install -y --no-install-recommends libpq5 curl shadowsocks-libev gosu gnupg && \
     rm -rf /var/lib/apt/lists/*
+
+# Install Node.js for agent-browser CLI
+RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    npm install -g agent-browser && \
+    agent-browser install && \
+    rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Copy installed packages from deps stage
 COPY --from=deps /usr/local/lib/python3.12/site-packages/ /usr/local/lib/python3.12/site-packages/

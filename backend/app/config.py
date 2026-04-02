@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     # Jina AI (Reader + Search APIs)
     JINA_API_KEY: str = ""
 
+    # Browser Tool
+    BROWSER_WHITELIST: list[str] = []
+    BROWSER_BLACKLIST: list[str] = []
+    BROWSER_MAX_TIMEOUT: int = 120  # agent-browser 最大超时(秒)
 
     # Sandbox configuration
     SANDBOX_TYPE: SandboxType = SandboxType.SUBPROCESS
